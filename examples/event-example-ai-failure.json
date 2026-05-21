@@ -1,0 +1,26 @@
+{
+  "schema_version": "1",
+  "source_repo": "mozilla-platform-ops/ronin_puppet",
+  "commit_sha": "fedcba9876543210fedcba9876543210fedcba98",
+  "commit_url": "https://github.com/mozilla-platform-ops/ronin_puppet/commit/fedcba9876543210fedcba9876543210fedcba98",
+  "pr_number": null,
+  "pr_url": null,
+  "actor": "mcornmesser",
+  "timestamp": "2026-05-21T16:12:03Z",
+  "commit_subject": "Disable noisy NTP debug logging on macOS",
+  "ai_summary": {
+    "model": "claude-opus-4-7",
+    "generated_at": "2026-05-21T16:12:18Z",
+    "description": null,
+    "headline": null,
+    "tags": [],
+    "error": "AI call failed: HTTP 529 overloaded after 3 retries"
+  },
+  "entities": [
+    {
+      "type": "module",
+      "id": "macos_ntp",
+      "files": ["modules/macos_ntp/manifests/init.pp"]
+    }
+  ]
+}

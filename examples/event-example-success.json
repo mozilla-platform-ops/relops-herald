@@ -1,0 +1,36 @@
+{
+  "schema_version": "1",
+  "source_repo": "mozilla-platform-ops/ronin_puppet",
+  "commit_sha": "0123456789abcdef0123456789abcdef01234567",
+  "commit_url": "https://github.com/mozilla-platform-ops/ronin_puppet/commit/0123456789abcdef0123456789abcdef01234567",
+  "pr_number": 1234,
+  "pr_url": "https://github.com/mozilla-platform-ops/ronin_puppet/pull/1234",
+  "actor": "mcornmesser",
+  "timestamp": "2026-05-21T15:00:00Z",
+  "commit_subject": "Bump generic_worker to 87.0.0 and raise talos timeout",
+  "ai_summary": {
+    "model": "claude-opus-4-7",
+    "generated_at": "2026-05-21T15:00:42Z",
+    "description": "Bumps `generic_worker` from 86.5.0 to 87.0.0 across Linux talos roles. Also raises the worker timeout in the talos profile from 1800s to 3600s to accommodate longer test jobs. No Hiera or secrets changes.",
+    "headline": "generic_worker 86.5.0 → 87.0.0 + talos timeout bump",
+    "tags": ["dependency-bump", "talos"],
+    "error": null
+  },
+  "entities": [
+    {
+      "type": "role",
+      "id": "gecko_t_linux_2404_talos",
+      "files": ["modules/roles_profiles/manifests/roles/gecko_t_linux_2404_talos.pp"]
+    },
+    {
+      "type": "profile",
+      "id": "gecko_t_linux_2404_talos_generic_worker",
+      "files": ["modules/roles_profiles/manifests/profiles/gecko_t_linux_2404_talos_generic_worker.pp"]
+    },
+    {
+      "type": "module",
+      "id": "generic_worker",
+      "files": ["modules/generic_worker/manifests/init.pp"]
+    }
+  ]
+}

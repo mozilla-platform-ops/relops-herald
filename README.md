@@ -1,6 +1,7 @@
 # RelOps Herald
 
-**Status:** Early POC. Not yet wired to any reporter.
+**Status:** Early POC. GitHub App live (`relops-herald-dispatch`); ingester and
+reporter template built; not yet wired end-to-end.
 
 Herald is a GitHub repository and automation system that collects change events
 from RelOps and adjacent repositories (ronin, worker-images, fxci-config, infra
@@ -32,9 +33,25 @@ schema/
 examples/
   event-example-success.json     # happy-path event
   event-example-ai-failure.json  # AI failed; event still flows with error set
+herald/                 # the ingester/renderer (event JSON -> Markdown)
+  ingest.py             # validate + render; python -m herald --event <f> --root .
+tests/
+  test_ingest.py        # schema-contract + rendering tests (stdlib unittest)
+.github/workflows/
+  ingest.yml            # repository_dispatch receiver: render + commit back
+reporter-templates/
+  ronin_puppet/         # copy-into-ronin reporter (workflow + helper scripts)
 changelogs/
   <entity_type>/<entity_id>.md   # per-entity changelogs (written by Herald)
 activity.md             # central activity log (written by Herald)
+```
+
+## Running the ingester
+
+```bash
+pip install -r requirements.txt
+python -m herald --event examples/event-example-success.json --root .
+python -m unittest discover -s tests      # tests (needs only jsonschema)
 ```
 
 ## How it (will) work
@@ -54,8 +71,8 @@ rather than dropping the change.
 
 ## What's not built yet
 
-- The ronin-side reporter workflow.
-- The Herald-side ingester / renderer.
-- The `repository_dispatch` plumbing.
+- End-to-end wiring: the reporter is a copy-in template, not yet installed in
+  ronin_puppet, and the two sides haven't been run against each other live.
+- A real AI summarizer in the reporter (`summarize.py` is a placeholder).
 - Slack output.
 - Reporters for worker-images, fxci-config, infra code.

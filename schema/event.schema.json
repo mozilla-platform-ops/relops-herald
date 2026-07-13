@@ -94,7 +94,7 @@
         },
         "error": {
           "type": ["string", "null"],
-          "description": "Non-null only when the AI call failed. Crier renders a stub entry in that case rather than dropping the change."
+          "description": "Non-null only when the AI call failed. Herald renders a stub entry in that case rather than dropping the change."
         }
       },
       "allOf": [

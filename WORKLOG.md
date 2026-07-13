@@ -11,9 +11,10 @@ not appended to.
 
 ## Current state (as of 2026-07-13)
 
-**Phase:** POC **wired end-to-end and verified live.** A role change in
-ronin_puppet dispatched to relops-herald and produced a committed changelog.
-Reporter still uses the placeholder summarizer and is scoped to a build branch.
+**Phase:** POC **wired end-to-end with the real AI summarizer, verified live.**
+A role change in ronin_puppet is summarized by Claude (Sonnet 5) on the diff,
+dispatched to relops-herald, and rendered into a committed changelog. Reporter
+is still scoped to a build branch (`herald-reporter-dev`), not master.
 
 **What exists:**
 - `README.md` — project overview, POC scope, intended data flow.
@@ -82,17 +83,36 @@ Reporter still uses the placeholder summarizer and is scoped to a build branch.
 4. ~~Wire it live — secrets, install reporter, one real end-to-end dispatch~~
    **DONE** — verified 2026-07-13 (see log). Reporter merged to ronin master
    (inert), building on `herald-reporter-dev`.
-5. **NEXT:** Replace the placeholder `summarize.py` with the real AI call
-   (keep the error-path shape). Then flip the reporter's push trigger
-   `branches: [herald-reporter-dev]` → `[master]` to go fully live.
-6. Housekeeping: the live test left a real changelog entry
-   (`changelogs/role/gecko_1_b_osx_1015.md` + activity row) for a comment-only
-   ronin commit — remove if we want a clean slate before real traffic.
+5. ~~Replace the placeholder `summarize.py` with the real AI call~~ **DONE
+   (2026-07-13)** — Claude Sonnet 5 summarizes the diff via structured outputs;
+   any failure → error-shaped `ai_summary` so the event still flows. Needs
+   `ANTHROPIC_API_KEY` secret on ronin_puppet (added).
+6. **NEXT:** Flip the reporter's push trigger `branches: [herald-reporter-dev]`
+   → `[master]` (edit `.github/workflows/report.yml`) and merge PR #1280 to go
+   fully live on real merges.
+7. Housekeeping before real traffic: the live tests left test changelog entries
+   (`changelogs/role/gecko_1_b_osx_1015.md` + activity rows) for comment-only
+   ronin commits — remove if we want a clean slate. Tune the summarizer
+   prompt/tags against real merges.
 7. Later: Slack output; reporters for worker-images / fxci-config / infra.
 
 ---
 
 ## Log
+
+### 2026-07-13 (later still) — real AI summarizer live
+- Replaced the placeholder `summarize.py` with a real **Claude Sonnet 5** call:
+  sends the commit subject + changed files + a size-bounded diff, uses
+  structured outputs (`output_config.format`) to return `{description, headline,
+  tags}`, thinking disabled. Any failure (missing key, network, refusal,
+  bad output) → error-shaped `ai_summary` so the event still flows as a stub.
+- Reporter workflow gains `pip install anthropic`, a diff-capture step, the
+  `ANTHROPIC_API_KEY` secret (already added to ronin_puppet), and a `before`
+  output from the meta step for the diff range. Model overridable via `MODEL`.
+- Verified live on `herald-reporter-dev`: a comment-only role change produced an
+  accurate Sonnet-5 summary (correctly flagged as a no-op, tags `test/herald/
+  no-op`), dispatched, and rendered into the role changelog on relops-herald
+  `main`. Error path also verified (SDK/key absent → valid stub event).
 
 ### 2026-07-13 (later) — end-to-end live
 - **Pipeline verified live.** Reporter deployed to ronin_puppet via PR

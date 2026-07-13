@@ -11,8 +11,9 @@ not appended to.
 
 ## Current state (as of 2026-07-13)
 
-**Phase:** Early POC — contract + both code halves built (ingester and reporter
-template); GitHub App live; not yet wired end-to-end.
+**Phase:** POC **wired end-to-end and verified live.** A role change in
+ronin_puppet dispatched to relops-herald and produced a committed changelog.
+Reporter still uses the placeholder summarizer and is scoped to a build branch.
 
 **What exists:**
 - `README.md` — project overview, POC scope, intended data flow.
@@ -78,16 +79,37 @@ template); GitHub App live; not yet wired end-to-end.
 2. ~~Reconcile docs; build Herald ingester + tests; fix Crier/`$id`~~ **DONE**.
 3. ~~Draft the ronin reporter~~ **DONE** — template in
    `reporter-templates/ronin_puppet/` (workflow + map/summarize/build helpers).
-4. **NEXT:** Wire it live — record the App ID/key + set `HERALD_APP_ID` /
-   `HERALD_APP_PRIVATE_KEY` secrets on ronin_puppet, install the reporter
-   (`reporter-templates/ronin_puppet/`) into ronin_puppet, and do one real
-   end-to-end dispatch. Then replace the placeholder summarizer with the real
-   AI call. (App is now installed on the target repo `relops-herald`.)
-5. Later: Slack output; reporters for worker-images / fxci-config / infra.
+4. ~~Wire it live — secrets, install reporter, one real end-to-end dispatch~~
+   **DONE** — verified 2026-07-13 (see log). Reporter merged to ronin master
+   (inert), building on `herald-reporter-dev`.
+5. **NEXT:** Replace the placeholder `summarize.py` with the real AI call
+   (keep the error-path shape). Then flip the reporter's push trigger
+   `branches: [herald-reporter-dev]` → `[master]` to go fully live.
+6. Housekeeping: the live test left a real changelog entry
+   (`changelogs/role/gecko_1_b_osx_1015.md` + activity row) for a comment-only
+   ronin commit — remove if we want a clean slate before real traffic.
+7. Later: Slack output; reporters for worker-images / fxci-config / infra.
 
 ---
 
 ## Log
+
+### 2026-07-13 (later) — end-to-end live
+- **Pipeline verified live.** Reporter deployed to ronin_puppet via PR
+  [#1280](https://github.com/mozilla-platform-ops/ronin_puppet/pull/1280),
+  scoped to build branch `herald-reporter-dev` (+ workflow_dispatch) so it does
+  not fire on master merges yet. Herald ingester + receiver merged to
+  relops-herald `main` (PRs #1–#3).
+- A comment-only change to `gecko_1_b_osx_1015.pp` on `herald-reporter-dev`
+  dispatched `herald-change`; the receiver rendered and committed
+  `changelogs/role/gecko_1_b_osx_1015.md` + an `activity.md` row (commit by
+  `relops-herald[bot]`).
+- **Gotcha fixed:** `repository_dispatch` caps `client_payload` at 10 top-level
+  properties; the event has 11. Nest the whole event under `client_payload.event`
+  (reporter) and unwrap it (receiver). First live attempt 422'd on this.
+- Secrets `HERALD_APP_ID` / `HERALD_APP_PRIVATE_KEY` set on ronin_puppet; app
+  installed on target repo `relops-herald` (Contents:write) — both confirmed by
+  a successful token-mint + dispatch.
 
 ### 2026-07-13
 - **GitHub App is live.** `relops-herald-dispatch` was security-reviewed (Clovis

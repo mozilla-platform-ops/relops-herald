@@ -31,8 +31,10 @@ jobs:
 
       - name: Materialize event payload
         env:
+          # The reporter nests the event under client_payload.event (the API
+          # caps client_payload at 10 top-level properties; the event has 11).
           # toJSON keeps the payload intact regardless of quoting/newlines.
-          PAYLOAD: ${{ toJSON(github.event.client_payload) }}
+          PAYLOAD: ${{ toJSON(github.event.client_payload.event) }}
         run: printf '%s' "$PAYLOAD" > "$RUNNER_TEMP/event.json"
 
       - name: Ingest

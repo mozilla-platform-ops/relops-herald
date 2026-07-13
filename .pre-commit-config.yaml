@@ -1,0 +1,18 @@
+# Pre-commit hooks for RelOps Herald.
+#
+# Herald is Python + YAML + JSON (schema/examples), so this is the generic
+# subset of the ronin_puppet config — no Puppet/Terraform/shellcheck hooks.
+# Generated output (changelogs/, activity.md) is written by the ingester bot,
+# not humans, so it's excluded from formatting hooks.
+exclude: '^(changelogs/|activity\.md$)'
+
+repos:
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v6.0.0
+  hooks:
+  - id: check-executables-have-shebangs
+  - id: check-json
+  - id: check-yaml
+  - id: check-merge-conflict
+  - id: end-of-file-fixer
+  - id: trailing-whitespace

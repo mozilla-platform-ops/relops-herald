@@ -11,7 +11,7 @@ from here. They are the emitting half of the Herald pipeline: on merge to
 |---|---|
 | `report.yml` | GitHub Actions workflow. Goes in `ronin_puppet/.github/workflows/`. |
 | `map_entities.py` | Deterministic changed-path → entity mapping (+ staging/alpha exclusion). |
-| `summarize.py` | Produces `ai_summary`. **Placeholder** — wire the real AI call here. |
+| `summarize.py` | Produces `ai_summary` by calling Claude (Sonnet 5) on the diff. |
 | `build_event.py` | Assembles the final event JSON from the above + commit metadata. |
 
 Suggested layout in ronin_puppet: workflow in `.github/workflows/report.yml`,
@@ -19,8 +19,13 @@ the three scripts in `.github/herald/` (matches the paths in `report.yml`).
 
 ## Prerequisites
 
-1. **Secrets on `ronin_puppet`:** `HERALD_APP_ID` and `HERALD_APP_PRIVATE_KEY`
-   (the `relops-herald-dispatch` app's ID and private key).
+1. **Secrets on `ronin_puppet`:**
+   - `HERALD_APP_ID` and `HERALD_APP_PRIVATE_KEY` — the `relops-herald-dispatch`
+     app's ID and private key (for the dispatch).
+   - `ANTHROPIC_API_KEY` — used by `summarize.py` to call Claude. If unset, the
+     summary step fails gracefully into an error-shaped `ai_summary` and the
+     change still flows as a stub (the AI-failure path). Change the model via
+     the `MODEL` env var (default `claude-sonnet-5`).
 
 2. ⚠️ **App must be installed on the _target_ repo `relops-herald`.** The
    dispatch is `POST /repos/mozilla-platform-ops/relops-herald/dispatches`, so
@@ -54,8 +59,8 @@ real merges to `master`. When the reporter is ready, change
 
 ## Open items
 
-- Replace the `summarize.py` fallback with the real AI agent; keep the
-  error-path shape so a failed AI call still emits a (stub) event.
+- Tune the `summarize.py` prompt/model against real ronin merges once traffic
+  flows (e.g. tag vocabulary, description length).
 
 ## Verified against ronin_puppet (2026-07-13)
 

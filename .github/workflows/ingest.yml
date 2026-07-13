@@ -42,8 +42,8 @@ jobs:
 
       - name: Commit rendered changelogs
         env:
-          SUBJECT: ${{ github.event.client_payload.commit_subject }}
-          SHA: ${{ github.event.client_payload.commit_sha }}
+          SUBJECT: ${{ github.event.client_payload.event.commit_subject }}
+          SHA: ${{ github.event.client_payload.event.commit_sha }}
         run: |
           git config user.name "relops-herald[bot]"
           git config user.email "relops-herald[bot]@users.noreply.github.com"

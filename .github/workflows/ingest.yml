@@ -1,0 +1,54 @@
+name: Herald ingest
+
+# Receiving side of the repository_dispatch path: a reporter repo (first
+# ronin_puppet) POSTs a change event as client_payload; this workflow validates
+# it, renders the changelog + activity outputs, and commits them back.
+
+on:
+  repository_dispatch:
+    types: [herald-change]
+
+# Needed to push the rendered changelogs back to this repo.
+permissions:
+  contents: write
+
+concurrency:
+  # Serialize commits so concurrent dispatches don't race on the same files.
+  group: herald-ingest
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Materialize event payload
+        env:
+          # toJSON keeps the payload intact regardless of quoting/newlines.
+          PAYLOAD: ${{ toJSON(github.event.client_payload) }}
+        run: printf '%s' "$PAYLOAD" > "$RUNNER_TEMP/event.json"
+
+      - name: Ingest
+        run: python -m herald --event "$RUNNER_TEMP/event.json" --root .
+
+      - name: Commit rendered changelogs
+        env:
+          SUBJECT: ${{ github.event.client_payload.commit_subject }}
+          SHA: ${{ github.event.client_payload.commit_sha }}
+        run: |
+          git config user.name "relops-herald[bot]"
+          git config user.email "relops-herald[bot]@users.noreply.github.com"
+          git add changelogs activity.md
+          if git diff --cached --quiet; then
+            echo "No changes to commit (event already ingested)."
+          else
+            git commit -m "herald: ${SUBJECT}" -m "Source commit: ${SHA}"
+            git push
+          fi

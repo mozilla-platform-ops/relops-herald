@@ -9,21 +9,31 @@ not appended to.
 
 ---
 
-## Current state (as of 2026-07-13)
+## Current state (as of 2026-07-15)
 
-**Phase:** POC **wired end-to-end with the real AI summarizer, verified live.**
-A role change in ronin_puppet is summarized by Claude (Sonnet 5) on the diff,
-dispatched to relops-herald, and rendered into a committed changelog. Reporter
-is still scoped to a build branch (`herald-reporter-dev`), not master.
+**Phase:** POC **wired end-to-end with the real AI summarizer, verified live**,
+now with **multi-view changelog fan-out** in the ingester (on branch
+`add-fanout-views`). A role change in ronin_puppet is summarized by Claude
+(Sonnet 5) on the diff, dispatched to relops-herald, and rendered into committed
+changelogs. Reporter is still scoped to a build branch (`herald-reporter-dev`),
+not master.
 
 **What exists:**
 - `README.md` — project overview, POC scope, intended data flow.
 - `schema/event.schema.json` — the change-event contract (JSON Schema draft 2020-12).
 - `examples/event-example-*.json` — happy-path + AI-failure events.
 - `herald/` — the ingester/renderer (`python -m herald --event <f> --root .`);
-  validates the event, renders newest-first per-entity changelogs + `activity.md`,
-  idempotent per commit_sha.
-- `tests/test_ingest.py` — 10 stdlib-unittest tests (schema contract + rendering).
+  validates the event, fans each event out into **four newest-first views**,
+  idempotent per commit_sha:
+  - `activity.md` — the relops-all firehose (one table row per change).
+  - `changelogs/worker-pools/<id>.md` — per worker pool (the *role level*):
+    merges `role` + `role-hiera` entities sharing an id.
+  - `changelogs/by-os/<macos|linux|windows>.md` — per-OS rollups; OS derived
+    from entity-id naming, and a change with no OS signal fans out to all three.
+  - `changelogs/<type>/<id>.md` — per-entity for the remaining types
+    (`module | profile | os-data | common-data`).
+- `tests/test_ingest.py` — 16 stdlib-unittest tests (schema contract + OS/pool
+  grouping + fan-out rendering).
 - `.github/workflows/ingest.yml` — repository_dispatch receiver (render + commit).
 - `reporter-templates/ronin_puppet/` — copy-into-ronin reporter: workflow +
   `map_entities.py` / `summarize.py` (placeholder AI) / `build_event.py`.
@@ -99,6 +109,25 @@ is still scoped to a build branch (`herald-reporter-dev`), not master.
 ---
 
 ## Log
+
+### 2026-07-15 — multi-view changelog fan-out (branch `add-fanout-views`)
+- Reworked the ingester renderer to fan each event into **four views** instead
+  of the original two (per-entity + activity):
+  - `changelogs/worker-pools/<id>.md` — **new**: `role` + `role-hiera` entities
+    that share an id are merged into one per-worker-pool changelog (role level).
+  - `changelogs/by-os/<os>.md` — **new**: per-OS rollups (macos/linux/windows).
+    OS is derived from entity-id naming (`osx|mac|darwin`, `linux|debian|ubuntu`,
+    `win*|windows`); a change with no OS-specific entity fans out to all three.
+    Guarded against "darwin" being misread as windows.
+  - `changelogs/<type>/<id>.md` — per-entity, now scoped to `module | profile |
+    os-data | common-data` only (role/role-hiera roll up into worker-pools).
+  - `activity.md` — unchanged concept, retitled to the relops-all firehose.
+- `IngestResult` refactored: `entity_logs` / `worker_pool_logs` / `os_logs`
+  lists + an `all_written` property; `__main__.py` prints from `all_written`.
+- Tests grew 10 → 16: added `GroupingTests` (OS derivation, darwin≠windows,
+  role+hiera merge) and rewrote the ingest tests for the fan-out layout.
+- All 16 tests pass (`python3 -m unittest discover -s tests`). Committed on a
+  branch, not yet merged.
 
 ### 2026-07-13 (later still) — real AI summarizer live
 - Replaced the placeholder `summarize.py` with a real **Claude Sonnet 5** call:

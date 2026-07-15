@@ -49,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     if result.skipped_duplicate:
         print(f"herald: commit {event['commit_sha'][:12]} already ingested; nothing to do.")
     else:
-        for path in result.changelogs_written:
+        for path in result.all_written:
             print(f"herald: wrote {path}")
         if result.activity_written:
             print("herald: updated activity.md")

@@ -1,11 +1,17 @@
 """Herald ingester / renderer.
 
-Turns a validated change event (see ``schema/event.schema.json``) into Markdown:
+Turns a validated change event (see ``schema/event.schema.json``) into Markdown,
+fanning each event out into several views:
 
-* one changelog file per entity at ``changelogs/<type>/<id>.md``
-* a row in the central ``activity.md`` stream
+* ``activity.md`` — the relops-all firehose (one table row per change)
+* ``changelogs/worker-pools/<id>.md`` — per worker pool (the *role level*):
+  merges the ``role`` and ``role-hiera`` entities that share an id
+* ``changelogs/by-os/<macos|linux|windows>.md`` — per-OS rollup. OS is derived
+  from entity ids; a change with no OS-specific entity fans out to all three.
+* ``changelogs/<type>/<id>.md`` — per-entity changelog for the remaining entity
+  types (``module``, ``profile``, ``os-data``, ``common-data``)
 
-Both outputs are **newest-first** and **idempotent**: re-ingesting the same
+All outputs are **newest-first** and **idempotent**: re-ingesting the same
 commit is a no-op (each entry carries a ``<!-- herald:commit=<sha> -->`` anchor,
 which we check before writing).
 
@@ -18,7 +24,7 @@ the ``client_payload`` to :func:`ingest_event`. It is also runnable as a CLI:
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -31,8 +37,19 @@ except ImportError as exc:  # pragma: no cover - dependency guard
 
 # Repo layout, relative to the repo root passed into ingest_event().
 SCHEMA_REL = Path("schema/event.schema.json")
-CHANGELOGS_DIR = "changelogs"
+CHANGELOGS_DIR = Path("changelogs")
+OS_DIR = CHANGELOGS_DIR / "by-os"
+WORKER_POOL_DIR = CHANGELOGS_DIR / "worker-pools"
 ACTIVITY_FILE = "activity.md"
+
+# Entity types that get their own per-entity changelog. role / role-hiera are
+# excluded because they roll up into the per-worker-pool view instead.
+PER_ENTITY_TYPES = {"module", "profile", "os-data", "common-data"}
+# Entity types that identify a worker pool (the "role level").
+WORKER_POOL_TYPES = {"role", "role-hiera"}
+
+# OS logs, in a stable order. A change with no OS-specific entity fans out to all.
+ALL_OSES = ("macos", "linux", "windows")
 
 # Sentinel comments marking where new content is inserted (newest-first).
 ENTRIES_MARKER = "<!-- HERALD:ENTRIES -->"
@@ -51,9 +68,15 @@ class ValidationFailed(HeraldError):
 class IngestResult:
     """What a single ingest touched."""
 
-    changelogs_written: list[Path]
-    activity_written: bool
-    skipped_duplicate: bool
+    entity_logs: list[Path] = field(default_factory=list)
+    worker_pool_logs: list[Path] = field(default_factory=list)
+    os_logs: list[Path] = field(default_factory=list)
+    activity_written: bool = False
+    skipped_duplicate: bool = False
+
+    @property
+    def all_written(self) -> list[Path]:
+        return self.entity_logs + self.worker_pool_logs + self.os_logs
 
 
 def load_schema(root: Path) -> dict[str, Any]:
@@ -77,6 +100,43 @@ def validate_event(event: dict[str, Any], schema: dict[str, Any]) -> None:
         raise ValidationFailed(f"event failed schema validation:\n{detail}")
 
 
+# --- OS classification & grouping ----------------------------------------
+
+
+def _oses_for_id(entity_id: str) -> set[str]:
+    """Derive the OS(es) an entity id implies from its naming (best effort)."""
+    s = entity_id.lower()
+    oses: set[str] = set()
+    if "osx" in s or "mac" in s or "darwin" in s:
+        oses.add("macos")
+    if "linux" in s or "debian" in s or "ubuntu" in s:
+        oses.add("linux")
+    if s.startswith("win") or "windows" in s:
+        oses.add("windows")
+    return oses
+
+
+def classify_oses(event: dict[str, Any]) -> list[str]:
+    """OS logs this event belongs in. No OS signal → all three (fan out)."""
+    found: set[str] = set()
+    for entity in event["entities"]:
+        found |= _oses_for_id(entity["id"])
+    return [os_name for os_name in ALL_OSES if os_name in found] or list(ALL_OSES)
+
+
+def worker_pool_ids(event: dict[str, Any]) -> list[str]:
+    """The worker pools (role level) this event touches, sorted and deduped."""
+    return sorted(
+        {e["id"] for e in event["entities"] if e["type"] in WORKER_POOL_TYPES}
+    )
+
+
+def _files_for(event: dict[str, Any], predicate) -> list[str]:
+    return sorted(
+        {f for e in event["entities"] if predicate(e) for f in e["files"]}
+    )
+
+
 # --- rendering ------------------------------------------------------------
 
 
@@ -95,29 +155,51 @@ def _summary_text(ai: dict[str, Any]) -> str:
     return f"_AI summary unavailable: {ai.get('error') or 'unknown error'}_"
 
 
-def render_entity_entry(event: dict[str, Any], entity: dict[str, Any]) -> str:
-    """Render one changelog entry for a single entity."""
+def _entry(event: dict[str, Any], files: list[str], *, show_entities: bool) -> str:
+    """Core changelog entry: heading, meta, summary, (entities,) files, tags."""
     ai = event["ai_summary"]
-    meta_bits = [_commit_link(event), event["timestamp"], f"@{event['actor']}"]
+    meta = [_commit_link(event), event["timestamp"], f"@{event['actor']}"]
     if event.get("pr_number"):
-        meta_bits.append(f"[PR #{event['pr_number']}]({event['pr_url']})")
+        meta.append(f"[PR #{event['pr_number']}]({event['pr_url']})")
 
-    files = "\n".join(f"  - `{f}`" for f in entity["files"])
     lines = [
         f"<!-- herald:commit={event['commit_sha']} -->",
         f"## {event['commit_subject']}",
         "",
-        " · ".join(meta_bits),
+        " · ".join(meta),
         "",
         _summary_text(ai),
         "",
-        "Files:",
-        files,
     ]
+    if show_entities:
+        lines.append("Entities:")
+        lines += [f"  - {e['type']}: `{e['id']}`" for e in event["entities"]]
+        lines.append("")
+    lines.append("Files:")
+    lines += [f"  - `{f}`" for f in files]
     tags = ai.get("tags") or []
     if tags:
         lines += ["", "Tags: " + " ".join(f"`{t}`" for t in tags)]
     return "\n".join(lines) + "\n"
+
+
+def render_entity_entry(event: dict[str, Any], entity: dict[str, Any]) -> str:
+    """Per-entity entry, scoped to that entity's files."""
+    return _entry(event, sorted(entity["files"]), show_entities=False)
+
+
+def render_worker_pool_entry(event: dict[str, Any], pool_id: str) -> str:
+    """Per-worker-pool entry: files from role/role-hiera entities for this id."""
+    files = _files_for(
+        event, lambda e: e["type"] in WORKER_POOL_TYPES and e["id"] == pool_id
+    )
+    return _entry(event, files, show_entities=False)
+
+
+def render_event_entry(event: dict[str, Any]) -> str:
+    """Commit-scoped entry (all entities + files) for the OS rollups."""
+    files = _files_for(event, lambda e: True)
+    return _entry(event, files, show_entities=True)
 
 
 def render_activity_row(event: dict[str, Any]) -> str:
@@ -142,6 +224,9 @@ def render_activity_row(event: dict[str, Any]) -> str:
     )
 
 
+# --- file headers ---------------------------------------------------------
+
+
 def _entity_file_header(entity: dict[str, Any]) -> str:
     return (
         f"# {entity['type']}: {entity['id']}\n\n"
@@ -151,15 +236,36 @@ def _entity_file_header(entity: dict[str, Any]) -> str:
     )
 
 
+def _worker_pool_header(pool_id: str) -> str:
+    return (
+        f"# worker pool: {pool_id}\n\n"
+        f"Changelog for the `{pool_id}` worker pool (role + role Hiera), "
+        f"maintained by RelOps Herald. Newest entries first.\n\n"
+        f"{ENTRIES_MARKER}\n"
+    )
+
+
+def _os_file_header(os_name: str) -> str:
+    return (
+        f"# OS activity: {os_name}\n\n"
+        f"All changes affecting {os_name} workers, maintained by RelOps Herald. "
+        f"Newest first. Changes with no OS-specific entity appear in every OS "
+        f"log.\n\n{ENTRIES_MARKER}\n"
+    )
+
+
 def _activity_header() -> str:
     return (
-        "# Activity\n\n"
-        "Central activity log across all reporter repos, maintained by RelOps "
-        "Herald. Newest first.\n\n"
+        "# Activity (relops-all)\n\n"
+        "Every change across all reporter repos, maintained by RelOps Herald. "
+        "Newest first.\n\n"
         "| When (UTC) | Repo | Entities | Change | Commit |\n"
         "|---|---|---|---|---|\n"
         f"{ROWS_MARKER}\n"
     )
+
+
+# --- writing --------------------------------------------------------------
 
 
 def _insert_after_marker(existing: str, marker: str, block: str) -> str:
@@ -196,7 +302,7 @@ def ingest_event(
 ) -> IngestResult:
     """Validate and render one change event into the tree at ``root``.
 
-    Writes/updates one changelog per entity plus the central activity log.
+    Fans out into per-entity, per-worker-pool, per-OS, and relops-all views.
     Idempotent per ``commit_sha``.
     """
     root = Path(root)
@@ -204,8 +310,12 @@ def ingest_event(
         validate_event(event, load_schema(root))
 
     sha = event["commit_sha"]
-    changelogs_written: list[Path] = []
+    result = IngestResult()
+
+    # Per-entity changelogs (module / profile / os-data / common-data).
     for entity in event["entities"]:
+        if entity["type"] not in PER_ENTITY_TYPES:
+            continue
         path = root / CHANGELOGS_DIR / entity["type"] / f"{entity['id']}.md"
         if _write_newest_first(
             path,
@@ -214,9 +324,34 @@ def ingest_event(
             render_entity_entry(event, entity),
             sha,
         ):
-            changelogs_written.append(path)
+            result.entity_logs.append(path)
 
-    activity_written = _write_newest_first(
+    # Per-worker-pool (role level): role + role-hiera merged by id.
+    for pool_id in worker_pool_ids(event):
+        path = root / WORKER_POOL_DIR / f"{pool_id}.md"
+        if _write_newest_first(
+            path,
+            _worker_pool_header(pool_id),
+            ENTRIES_MARKER,
+            render_worker_pool_entry(event, pool_id),
+            sha,
+        ):
+            result.worker_pool_logs.append(path)
+
+    # Per-OS rollups.
+    for os_name in classify_oses(event):
+        path = root / OS_DIR / f"{os_name}.md"
+        if _write_newest_first(
+            path,
+            _os_file_header(os_name),
+            ENTRIES_MARKER,
+            render_event_entry(event),
+            sha,
+        ):
+            result.os_logs.append(path)
+
+    # relops-all firehose.
+    result.activity_written = _write_newest_first(
         root / ACTIVITY_FILE,
         _activity_header(),
         ROWS_MARKER,
@@ -224,9 +359,6 @@ def ingest_event(
         sha,
     )
 
-    return IngestResult(
-        changelogs_written=changelogs_written,
-        activity_written=activity_written,
-        # If nothing was written, this commit was already ingested everywhere.
-        skipped_duplicate=not changelogs_written and not activity_written,
-    )
+    # If nothing was written, this commit was already ingested everywhere.
+    result.skipped_duplicate = not result.all_written and not result.activity_written
+    return result

@@ -5,6 +5,7 @@ Every change we collect across all reporter repos, maintained by RelOps Herald. 
 | When (UTC) | Repo | Entities | Change | Commit |
 |---|---|---|---|---|
 <!-- HERALD:ROWS -->
+| 2026-07-16T10:33:41-07:00 | mozilla-platform-ops/ronin_puppet | role:gecko_t_linux_2404_talos | Touch gecko_t_linux_2404_talos.pp to test Herald linux-hardware routing | [`fb3463bb38aa`](https://github.com/mozilla-platform-ops/ronin_puppet/commit/fb3463bb38aa8342b9fbb06a458eaf63a2df0039)<!-- herald:commit=fb3463bb38aa8342b9fbb06a458eaf63a2df0039 --> |
 | 2026-07-16T10:19:39-07:00 | mozilla-platform-ops/ronin_puppet | role:win116424h2azure | Touch win116424h2azure.pp to test Herald windows-azure routing | [`2c5b21c42325`](https://github.com/mozilla-platform-ops/ronin_puppet/commit/2c5b21c4232547efc71b0a3384470f36095255a5)<!-- herald:commit=2c5b21c4232547efc71b0a3384470f36095255a5 --> |
 | 2026-07-16T10:19:02-07:00 | mozilla-platform-ops/ronin_puppet | role:win116424h2hw | Touch win116424h2hw.pp to test Herald windows-hardware routing | [`1e540890ac91`](https://github.com/mozilla-platform-ops/ronin_puppet/commit/1e540890ac91a70bd1749c9dad9a5d6a9ef4cdfb)<!-- herald:commit=1e540890ac91a70bd1749c9dad9a5d6a9ef4cdfb --> |
 | 2026-07-16T10:18:18-07:00 | mozilla-platform-ops/ronin_puppet | module:macos_safaridriver | macOS provisioner: retry-hardened Safari automation scripts, auto-BST + mTLS Vault fetch | [`23c856635abb`](https://github.com/mozilla-platform-ops/ronin_puppet/commit/23c856635abba915a8f962cc7f4806115c1686fd)<!-- herald:commit=23c856635abba915a8f962cc7f4806115c1686fd --> |

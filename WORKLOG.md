@@ -111,6 +111,14 @@ still scoped to a build branch (`herald-reporter-dev`), not master.
 
 ## Log
 
+### 2026-07-16 (reporter) — attribute events to the PR author
+- Changed ronin's `report.yml` (on `herald-reporter-dev`) so the event `actor`
+  is the **PR author** (`.user.login` from `commits/<sha>/pulls`), not the pusher.
+  Falls back to `github.actor` for direct pushes with no PR. Verified: YAML valid,
+  jq extraction correct, and the workflow-only push self-skipped (no entities →
+  no dispatch) so no spurious Herald event. Full PR-path attribution kicks in on
+  the next real PR-based merge (replay commits are direct pushes → fallback).
+
 ### 2026-07-16 (firehose v4) — per-platform tables per day + author
 - Each `## <date>` now holds **per-platform sub-tables** (`### 🍎 Mac workers`,
   `### 🐧 Linux workers`, `### 🪟 Windows workers`, `### Other`), rendered only

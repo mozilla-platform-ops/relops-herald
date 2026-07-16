@@ -3,6 +3,20 @@
 Every change across all mac worker pools, maintained by RelOps Herald. Newest first.
 
 <!-- HERALD:ENTRIES -->
+<!-- herald:commit=8198634cda099676d0737758ffbe179b3e4ad543 -->
+## reprovision_runner: activate step_renew on m4-81 (auto-renewing cert) (#1276)
+
+[`8198634cda09`](https://github.com/mozilla-platform-ops/ronin_puppet/commit/8198634cda099676d0737758ffbe179b3e4ad543) · 2026-07-16T10:16:36-07:00 · @markcor
+
+Switches the `gecko_t_osx_1500_m4_reprovision_runner` role from `cert_mode: vault` to `cert_mode: step_renew`, enabling the auto-renewing step-ca `step ca renew --daemon` LaunchDaemon since step-ca is now confirmed reachable from MDC1 by IP. Adds a new `step_ca_ip` parameter to the `reprovision_runner` module/profile that pins step-ca's IP in `/etc/hosts` (since its hostname isn't in MDC1 DNS) and orders the hosts entry before `step ca bootstrap`; the CA fingerprint is also promoted from a commented-out placeholder to an active Hiera key. This removes the need for the manual `mint-runner-cert.sh` periodic re-mint chore on this host.
+
+Entities:
+  - role-hiera: `gecko_t_osx_1500_m4_reprovision_runner`
+
+Files:
+  - `data/roles/gecko_t_osx_1500_m4_reprovision_runner.yaml`
+
+Tags: `reprovision_runner` `step-ca` `hiera` `certificates` `puppet`
 <!-- herald:commit=2b44b100865cebad292df032e5c3896a549a6ec7 -->
 ## reprovision_runner: document the ready-to-activate step_renew flip (#1275)
 

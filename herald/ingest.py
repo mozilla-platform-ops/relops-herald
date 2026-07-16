@@ -34,7 +34,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -254,41 +254,54 @@ def render_rollup_entry(event: dict[str, Any], pool_ids: list[str]) -> str:
     return _entry(event, files, entities=entities)
 
 
-# Platform badges for the all-events "Where" column, in a stable order.
-_PLATFORM_BADGE = (("macos", "🍎 mac"), ("linux", "🐧 linux"), ("windows", "🪟 windows"))
+# Explicit platform names for the all-events "Platform" column, stable order.
+_PLATFORM_BADGE = (("macos", "🍎 macOS"), ("linux", "🐧 Linux"), ("windows", "🪟 Windows"))
 
 
-def _parse_ts(timestamp: str) -> datetime | None:
+def _utc(timestamp: str) -> datetime | None:
+    """Parse an ISO timestamp and normalize to UTC; None if unparseable.
+
+    Naive timestamps (no offset) are assumed to already be UTC.
+    """
     try:
-        return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
     except ValueError:
         return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def _event_date(timestamp: str) -> str:
-    """Day header for the diary, e.g. 'Jul 16, 2026' (falls back to the date part)."""
-    dt = _parse_ts(timestamp)
+    """UTC day header for the diary, e.g. 'Jul 16, 2026' (falls back to date part)."""
+    dt = _utc(timestamp)
     return dt.strftime("%b %d, %Y") if dt else timestamp[:10]
 
 
 def _event_time(timestamp: str) -> str:
-    """Time-of-day cell within a day section, e.g. '10:16' (24h)."""
-    dt = _parse_ts(timestamp)
+    """UTC time-of-day cell within a day section, e.g. '17:16' (24h)."""
+    dt = _utc(timestamp)
     return dt.strftime("%H:%M") if dt else timestamp[11:16]
 
 
-def _where_summary(event: dict[str, Any]) -> str:
-    """Compact 'where' cell: platform badge(s) + entity count.
+def _platforms(event: dict[str, Any]) -> str:
+    """Explicit platform name(s) an event touches, e.g. '🍎 macOS, 🐧 Linux'.
 
-    Platforms are derived from every entity id (not just pool types), so a
-    module like ``macos_ntp`` still reads as mac. The full entity list lives in
-    the per-pool changelogs, so the firehose only carries a count.
+    Derived from every entity id (not just pool types), so a module like
+    ``macos_ntp`` still reads as macOS. ``shared`` when no id carries an OS
+    signal (e.g. a cross-platform module).
     """
     oses: set[str] = set()
     for entity in event["entities"]:
         oses |= _oses_for_id(entity["id"])
-    badges = " · ".join(label for os_name, label in _PLATFORM_BADGE if os_name in oses)
-    return f"{badges or 'shared'} · {len(event['entities'])}"
+    names = [label for os_name, label in _PLATFORM_BADGE if os_name in oses]
+    return ", ".join(names) or "shared"
+
+
+def _pools_cell(event: dict[str, Any]) -> str:
+    """The worker pools an event affects (role/role-hiera ids), or '—' if none."""
+    ids = worker_pool_ids(event)
+    return ", ".join(f"`{pool_id}`" for pool_id in ids) if ids else "—"
 
 
 def render_all_events_row(event: dict[str, Any]) -> str:
@@ -306,8 +319,8 @@ def render_all_events_row(event: dict[str, Any]) -> str:
     # the comment renders invisibly.
     commit_cell = f"[`{sha[:7]}`]({event['commit_url']})<!-- herald:commit={sha} -->"
     return (
-        f"| {_event_time(event['timestamp'])} | {change} "
-        f"| {_where_summary(event)} | {commit_cell} |\n"
+        f"| {_event_time(event['timestamp'])} | {change} | {_platforms(event)} "
+        f"| {_pools_cell(event)} | {commit_cell} |\n"
     )
 
 
@@ -333,15 +346,17 @@ def _rollup_header(label: str) -> str:
 
 
 # One table per day; the day's date is the `## ` header above it.
-_DAY_TABLE_HEAD = "| Time | Change | Where | Commit |\n|---|---|---|---|\n"
+_DAY_TABLE_SEP = "|---|---|---|---|---|"
+_DAY_TABLE_HEAD = (
+    f"| Time (UTC) | Change | Platform | Worker pools | Commit |\n{_DAY_TABLE_SEP}\n"
+)
 
 
 def _all_events_header() -> str:
     return (
         "# All events\n\n"
         "Every change we collect across all reporter repos, maintained by "
-        "RelOps Herald. Grouped by day, newest first; times as reported by the "
-        "source.\n\n"
+        "RelOps Herald. Grouped by day, newest first; times in UTC.\n\n"
         f"{ROWS_MARKER}\n"
     )
 
@@ -402,7 +417,7 @@ def _write_all_events(path: Path, event: dict[str, Any], commit_sha: str) -> boo
     if day_header in text:
         # Insert at the top of this day's rows: just after its table separator.
         start = text.index(day_header)
-        sep = text.index("|---|---|---|---|", start)
+        sep = text.index(_DAY_TABLE_SEP, start)
         at = text.index("\n", sep) + 1
         text = text[:at] + row + text[at:]
     else:

@@ -17,7 +17,8 @@ from herald.ingest import (
     ValidationFailed,
     _event_date,
     _event_time,
-    _where_summary,
+    _platforms,
+    _pools_cell,
     ingest_event,
     load_schema,
     route_pool,
@@ -115,24 +116,43 @@ class RoutingTests(unittest.TestCase):
     def test_no_os_signal_is_unroutable(self) -> None:
         self.assertIsNone(route_pool("generic_worker"))
 
-    def test_event_date_and_time(self) -> None:
+    def test_event_date_and_time_in_utc(self) -> None:
+        # 10:16 at -07:00 is 17:16 UTC (same calendar day).
         self.assertEqual(_event_date("2026-07-16T10:16:36-07:00"), "Jul 16, 2026")
-        self.assertEqual(_event_time("2026-07-16T10:16:36-07:00"), "10:16")
-        self.assertEqual(_event_date("2026-05-21T15:00:00Z"), "May 21, 2026")
+        self.assertEqual(_event_time("2026-07-16T10:16:36-07:00"), "17:16")
+        # A late local time rolls the UTC date forward.
+        self.assertEqual(_event_date("2026-07-16T20:00:00-07:00"), "Jul 17, 2026")
+        self.assertEqual(_event_time("2026-07-16T20:00:00-07:00"), "03:00")
+        # Z / naive already UTC.
+        self.assertEqual(_event_time("2026-05-21T15:00:00Z"), "15:00")
         # Unparseable input falls back gracefully to substrings, never raises.
         self.assertEqual(_event_date("2026-13-99T99:99:99"), "2026-13-99")
         self.assertEqual(_event_time("2026-13-99T99:99:99"), "99:99")
 
-    def test_where_summary_badges_and_count(self) -> None:
+    def test_platforms_explicit_names(self) -> None:
         ev = self._event([
             {"type": "role", "id": "gecko_1_b_osx_1015", "files": ["a"]},
             {"type": "module", "id": "linux_packages", "files": ["b"]},
         ])
-        # Platforms derived from all entity ids, in mac/linux/windows order.
-        self.assertEqual(_where_summary(ev), "🍎 mac · 🐧 linux · 2")
+        # Explicit names, mac/linux/windows order.
+        self.assertEqual(_platforms(ev), "🍎 macOS, 🐧 Linux")
         # No OS signal anywhere -> "shared".
         shared = self._event([{"type": "module", "id": "worker_runner", "files": ["c"]}])
-        self.assertEqual(_where_summary(shared), "shared · 1")
+        self.assertEqual(_platforms(shared), "shared")
+
+    def test_pools_cell_lists_only_worker_pools(self) -> None:
+        ev = self._event([
+            {"type": "role", "id": "gecko_1_b_osx_1015", "files": ["r.pp"]},
+            {"type": "role-hiera", "id": "gecko_1_b_osx_1015", "files": ["h.yaml"]},
+            {"type": "module", "id": "generic_worker", "files": ["m.pp"]},
+        ])
+        # role + role-hiera merge to one pool id; the module is not a pool.
+        self.assertEqual(_pools_cell(ev), "`gecko_1_b_osx_1015`")
+        # No pool entities -> em dash.
+        self.assertEqual(
+            _pools_cell(self._event([{"type": "module", "id": "packages", "files": ["a"]}])),
+            "—",
+        )
 
     def test_worker_pool_ids_merge_role_and_hiera(self) -> None:
         ev = self._event([
@@ -182,9 +202,12 @@ class IngestTests(unittest.TestCase):
         self.assertNotIn("module: `generic_worker`", rollup)
         self.assertNotIn("modules/generic_worker/manifests/init.pp", rollup)
 
-        # All-events firehose (a dir under changelogs/).
+        # All-events firehose (a dir under changelogs/): headline, explicit
+        # platform, and the affected worker pool all show.
         firehose = self._read("changelogs/all-events/changelog.md")
         self.assertIn(event["ai_summary"]["headline"], firehose)
+        self.assertIn("🐧 Linux", firehose)
+        self.assertIn("`gecko_t_linux_2404_talos`", firehose)
 
         # Non-pool entities get no dedicated changelog; other platforms untouched.
         self.assertFalse(self._exists("changelogs/module"))

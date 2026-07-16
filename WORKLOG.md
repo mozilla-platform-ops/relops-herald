@@ -111,23 +111,29 @@ still scoped to a build branch (`herald-reporter-dev`), not master.
 
 ## Log
 
-### 2026-07-16 (later still) — humanized the all-events firehose
-- Reworked `render_all_events_row` / `_all_events_header` for readability:
-  columns are now **When | Change | Where | Commit**. `When` is compact
-  (`Jul 16 10:16`), `Change` leads with the AI headline, `Where` is platform
-  badge(s) + entity count (`🍎 mac · 🐧 linux · 38`) instead of the full id list,
-  `Commit` is a 7-char sha link. Dropped the repo column (single source repo for
-  now; re-add when >1). This killed the unbounded Entities cell — the widest row
-  went 1,441 → ~155 chars. Migrated the existing 21 rows in place.
-- Added `_where_summary` + `_event_date`/`_event_time` (+ tests).
+### 2026-07-16 (firehose v3) — UTC, explicit platform, worker pools
+- Columns are now **Time (UTC) | Change | Platform | Worker pools | Commit**.
+  Times converted to UTC (`_utc` normalizes offset/naive; day-grouping is by UTC
+  date). `Where` → **Platform** with explicit names (`🍎 macOS` / `🐧 Linux` /
+  `🪟 Windows`, `shared` when no OS signal). New **Worker pools** column lists the
+  affected pool ids (role/role-hiera merged), `—` when none. Helpers
+  `_platforms` / `_pools_cell` (+ tests, 23 total). Migrated the live file.
+- Note: the bulk-revert row is wide (~622 chars) because it lists all 14 mac
+  pools — can cap to "first N + X more" if it becomes noisy.
 
-### 2026-07-16 (even later) — firehose reads like a diary
+### 2026-07-16 (firehose v2) — reads like a diary (day-grouped)
 - Day-grouped the all-events firehose: rows now sit under `## <date>` headers
-  (e.g. `## Jul 16, 2026`) in per-day tables, `Time | Change | Where | Commit`
-  (time-only rows, date in the header). New dedicated writer `_write_all_events`
-  inserts a row at the top of its day's table, creating a new day section at the
-  top of the file when needed; idempotent per commit_sha. Migrated the live file
-  (rebuilt from pre-format git history to keep full timestamps/entities). 22 tests.
+  (e.g. `## Jul 16, 2026`) in per-day tables (time-only rows, date in the header).
+  New dedicated writer `_write_all_events` inserts a row at the top of its day's
+  table, creating a new day section at the top of the file when needed; idempotent
+  per commit_sha. Migrated the live file (rebuilt from pre-format git history).
+
+### 2026-07-16 (firehose v1) — humanized columns
+- Reworked `render_all_events_row` / `_all_events_header` for readability:
+  compact `When`, headline-first `Change`, a `Where` cell (platform badge +
+  count) instead of the full id list, and a 7-char sha link. Dropped the repo
+  column (single source repo for now). Killed the unbounded Entities cell — the
+  widest row went 1,441 → ~155 chars. Added `_event_date`/`_event_time`.
 
 ### 2026-07-16 (later) — live end-to-end replay validated the platform tree
 - Ran the **replay test method** against real ronin history to exercise the new

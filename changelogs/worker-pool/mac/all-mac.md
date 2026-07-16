@@ -3,6 +3,44 @@
 Every change across all mac worker pools, maintained by RelOps Herald. Newest first.
 
 <!-- HERALD:ENTRIES -->
+<!-- herald:commit=bb63fec04a5567001b18f0233e985596e72291aa -->
+## [RELOPS-2214] puppet module power mgmt (#1071)
+
+[`bb63fec04a55`](https://github.com/mozilla-platform-ops/ronin_puppet/commit/bb63fec04a5567001b18f0233e985596e72291aa) · 2026-07-16T10:03:50-07:00 · @markcor
+
+Adds a new `macos_power_management` module using `pmset` exec resources to disable sleep, display sleep, and disk sleep while enabling wake-on-LAN and autorestart, replacing the old `macos_mobileconfig_profiles::power_management` class in the `power_management` profile. The `power_management` profile is now also included in several macOS roles (enterprise, gecko, nss) that previously lacked it.
+
+Entities:
+  - role: `enterprise_1_b_osx_arm64`
+  - role: `enterprise_3_b_osx_arm64`
+  - role: `gecko_1_b_osx_1015`
+  - role: `gecko_1_b_osx_arm64`
+  - role: `gecko_3_b_osx_1015`
+  - role: `gecko_3_b_osx_arm64`
+  - role: `gecko_t_osx_1015_r8`
+  - role: `gecko_t_osx_1400_r8`
+  - role: `gecko_t_osx_1500_m4`
+  - role: `gecko_t_osx_1500_m4_ipv6`
+  - role: `gecko_t_osx_1500_m_vms`
+  - role: `nss_1_b_osx_1015`
+  - role: `nss_3_b_osx_1015`
+
+Files:
+  - `modules/roles_profiles/manifests/roles/enterprise_1_b_osx_arm64.pp`
+  - `modules/roles_profiles/manifests/roles/enterprise_3_b_osx_arm64.pp`
+  - `modules/roles_profiles/manifests/roles/gecko_1_b_osx_1015.pp`
+  - `modules/roles_profiles/manifests/roles/gecko_1_b_osx_arm64.pp`
+  - `modules/roles_profiles/manifests/roles/gecko_3_b_osx_1015.pp`
+  - `modules/roles_profiles/manifests/roles/gecko_3_b_osx_arm64.pp`
+  - `modules/roles_profiles/manifests/roles/gecko_t_osx_1015_r8.pp`
+  - `modules/roles_profiles/manifests/roles/gecko_t_osx_1400_r8.pp`
+  - `modules/roles_profiles/manifests/roles/gecko_t_osx_1500_m4.pp`
+  - `modules/roles_profiles/manifests/roles/gecko_t_osx_1500_m4_ipv6.pp`
+  - `modules/roles_profiles/manifests/roles/gecko_t_osx_1500_m_vms.pp`
+  - `modules/roles_profiles/manifests/roles/nss_1_b_osx_1015.pp`
+  - `modules/roles_profiles/manifests/roles/nss_3_b_osx_1015.pp`
+
+Tags: `macos` `power-management` `puppet-module` `roles-profiles` `hiera`
 <!-- herald:commit=ee98aa6d86f74ab7f54186a2b193d1f0d7ed3d2d -->
 ## herald test: revert 20 ronin commits (baseline reset for replay)
 

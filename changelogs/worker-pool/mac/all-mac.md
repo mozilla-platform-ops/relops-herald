@@ -3,6 +3,20 @@
 Every change across all mac worker pools, maintained by RelOps Herald. Newest first.
 
 <!-- HERALD:ENTRIES -->
+<!-- herald:commit=2b44b100865cebad292df032e5c3896a549a6ec7 -->
+## reprovision_runner: document the ready-to-activate step_renew flip (#1275)
+
+[`2b44b100865c`](https://github.com/mozilla-platform-ops/ronin_puppet/commit/2b44b100865cebad292df032e5c3896a549a6ec7) · 2026-07-16T10:15:52-07:00 · @markcor
+
+Updated documentation comments in the gecko_t_osx_1500_m4_reprovision_runner Hiera role to clarify why `cert_mode: vault` is used instead of `step_renew`, noting the 24h step-ca provisioner cap and the need for periodic re-minting via mint-runner-cert.sh. Added detailed activation steps for flipping to `cert_mode: step_renew` once step-ca is reachable from MDC1, referencing relops-bootstrap#28 and the reprovision_runner module README. No functional configuration change; comments only.
+
+Entities:
+  - role-hiera: `gecko_t_osx_1500_m4_reprovision_runner`
+
+Files:
+  - `data/roles/gecko_t_osx_1500_m4_reprovision_runner.yaml`
+
+Tags: `hiera` `documentation` `reprovision_runner` `config`
 <!-- herald:commit=f1b1347adff24aa4e212d234f596819c430c6305 -->
 ## reprovision_runner role data: wire creds + cert via vault_secrets (cert_mode: vault) (#1272)
 

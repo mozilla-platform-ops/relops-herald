@@ -111,6 +111,20 @@ still scoped to a build branch (`herald-reporter-dev`), not master.
 
 ## Log
 
+### 2026-07-16 (firehose v4) — per-platform tables per day + author
+- Each `## <date>` now holds **per-platform sub-tables** (`### 🍎 Mac workers`,
+  `### 🐧 Linux workers`, `### 🪟 Windows workers`, `### Other`), rendered only
+  when they have rows, in fixed order. Dropped the Platform column (heading =
+  platform). Columns: **Time (UTC) | Change | Worker pools | Commit**; the Commit
+  cell now shows the author (`· @actor`).
+- An event lands in **every** platform bucket it touches (cross-platform commits
+  appear in several, each scoped to that platform's pools). No-OS-signal changes
+  (shared cross-platform tooling) → **Other** — that's what "shared" meant in the
+  old Platform column. Azure/GCP buckets can be added later.
+- New `_event_buckets` / `_pools_for_platform` / `_insert_firehose_row` /
+  `_bucket_block`; rewrote `_write_all_events`. 24 tests. Migrated the live file
+  (author backfilled as `markcor`, the replay pusher).
+
 ### 2026-07-16 (firehose v3) — UTC, explicit platform, worker pools
 - Columns are now **Time (UTC) | Change | Platform | Worker pools | Commit**.
   Times converted to UTC (`_utc` normalizes offset/naive; day-grouping is by UTC

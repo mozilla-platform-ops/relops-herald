@@ -254,8 +254,17 @@ def render_rollup_entry(event: dict[str, Any], pool_ids: list[str]) -> str:
     return _entry(event, files, entities=entities)
 
 
-# Explicit platform names for the all-events "Platform" column, stable order.
-_PLATFORM_BADGE = (("macos", "🍎 macOS"), ("linux", "🐧 Linux"), ("windows", "🪟 Windows"))
+# Firehose day sub-tables ("buckets"), in display order. An event lands in every
+# platform bucket it touches (by OS signal from its entity ids); changes with no
+# OS signal (shared cross-platform tooling) land in "Other". Cloud environments
+# (Azure, GCP) can be added here later as their own buckets.
+_FIREHOSE_BUCKETS = (
+    ("macos", "🍎 Mac workers"),
+    ("linux", "🐧 Linux workers"),
+    ("windows", "🪟 Windows workers"),
+    (None, "Other"),
+)
+_BUCKET_ORDER = {heading: i for i, (_, heading) in enumerate(_FIREHOSE_BUCKETS)}
 
 
 def _utc(timestamp: str) -> datetime | None:
@@ -284,28 +293,33 @@ def _event_time(timestamp: str) -> str:
     return dt.strftime("%H:%M") if dt else timestamp[11:16]
 
 
-def _platforms(event: dict[str, Any]) -> str:
-    """Explicit platform name(s) an event touches, e.g. '🍎 macOS, 🐧 Linux'.
+def _event_buckets(event: dict[str, Any]) -> list[tuple[str | None, str]]:
+    """Firehose buckets an event belongs to, by OS signal; ``Other`` if none.
 
-    Derived from every entity id (not just pool types), so a module like
-    ``macos_ntp`` still reads as macOS. ``shared`` when no id carries an OS
-    signal (e.g. a cross-platform module).
+    OS is derived from every entity id (not just pool types), so a module like
+    ``macos_ntp`` still lands under Mac workers.
     """
     oses: set[str] = set()
     for entity in event["entities"]:
         oses |= _oses_for_id(entity["id"])
-    names = [label for os_name, label in _PLATFORM_BADGE if os_name in oses]
-    return ", ".join(names) or "shared"
+    hit = [
+        (os_name, heading)
+        for os_name, heading in _FIREHOSE_BUCKETS
+        if os_name is not None and os_name in oses
+    ]
+    return hit or [(None, "Other")]
 
 
-def _pools_cell(event: dict[str, Any]) -> str:
-    """The worker pools an event affects (role/role-hiera ids), or '—' if none."""
-    ids = worker_pool_ids(event)
-    return ", ".join(f"`{pool_id}`" for pool_id in ids) if ids else "—"
+def _pools_for_platform(event: dict[str, Any], os_name: str | None) -> str:
+    """Worker pools of ``os_name`` this event affects, or '—' if none."""
+    if os_name is None:
+        return "—"
+    ids = [p for p in worker_pool_ids(event) if os_name in _oses_for_id(p)]
+    return ", ".join(f"`{p}`" for p in ids) if ids else "—"
 
 
-def render_all_events_row(event: dict[str, Any]) -> str:
-    """Render one all-events firehose table row for the whole event."""
+def _render_event_row(event: dict[str, Any], pools_cell: str) -> str:
+    """Render one firehose row (within a platform sub-table)."""
     ai = event["ai_summary"]
     if ai.get("headline"):
         change = ai["headline"]
@@ -315,12 +329,14 @@ def render_all_events_row(event: dict[str, Any]) -> str:
         change = f"⚠️ {event['commit_subject']} (AI summary unavailable)"
     change = change.replace("|", "\\|")  # escape pipes so cells can't break
     sha = event["commit_sha"]
-    # The commit cell carries a hidden anchor so rows are idempotent per commit;
-    # the comment renders invisibly.
-    commit_cell = f"[`{sha[:7]}`]({event['commit_url']})<!-- herald:commit={sha} -->"
+    # Commit cell: short sha link + author; hidden anchor keeps rows idempotent.
+    commit_cell = (
+        f"[`{sha[:7]}`]({event['commit_url']}) · @{event['actor']}"
+        f"<!-- herald:commit={sha} -->"
+    )
     return (
-        f"| {_event_time(event['timestamp'])} | {change} | {_platforms(event)} "
-        f"| {_pools_cell(event)} | {commit_cell} |\n"
+        f"| {_event_time(event['timestamp'])} | {change} "
+        f"| {pools_cell} | {commit_cell} |\n"
     )
 
 
@@ -345,10 +361,10 @@ def _rollup_header(label: str) -> str:
     )
 
 
-# One table per day; the day's date is the `## ` header above it.
-_DAY_TABLE_SEP = "|---|---|---|---|---|"
-_DAY_TABLE_HEAD = (
-    f"| Time (UTC) | Change | Platform | Worker pools | Commit |\n{_DAY_TABLE_SEP}\n"
+# Per-day, per-platform sub-tables. Date is the `## ` header, platform the `### `.
+_DAY_TABLE_SEP = "|---|---|---|---|"
+_BUCKET_TABLE_HEAD = (
+    f"| Time (UTC) | Change | Worker pools | Commit |\n{_DAY_TABLE_SEP}\n"
 )
 
 
@@ -356,9 +372,15 @@ def _all_events_header() -> str:
     return (
         "# All events\n\n"
         "Every change we collect across all reporter repos, maintained by "
-        "RelOps Herald. Grouped by day, newest first; times in UTC.\n\n"
+        "RelOps Herald. Grouped by day (newest first) and by platform; times in "
+        "UTC.\n\n"
         f"{ROWS_MARKER}\n"
     )
+
+
+def _bucket_block(heading: str, row: str) -> str:
+    """A fresh platform sub-section (heading + table head + first row)."""
+    return f"### {heading}\n\n{_BUCKET_TABLE_HEAD}{row}\n"
 
 
 # --- writing --------------------------------------------------------------
@@ -393,13 +415,49 @@ def _write_newest_first(
     return True
 
 
-def _write_all_events(path: Path, event: dict[str, Any], commit_sha: str) -> bool:
-    """Append the event to the diary-style firehose (day-grouped, newest first).
+def _insert_firehose_row(text: str, day_header: str, heading: str, row: str) -> str:
+    """Insert ``row`` under ``day_header`` → ``### heading``, creating sections.
 
-    Rows live under a ``## <date>`` header + per-day table. A new row goes at the
-    top of its day's table if that day already exists, else a fresh day section
-    is created at the top of the file. Idempotent per ``commit_sha``. Real events
-    arrive in time order, so a newer date landing on top is the common case.
+    Days go newest-first at the top of the log; within a day, platform
+    sub-tables keep ``_FIREHOSE_BUCKETS`` order; within a sub-table the row goes
+    on top (newest first).
+    """
+    sub = f"### {heading}"
+    if day_header not in text:
+        block = f"{day_header}\n\n{_bucket_block(heading, row)}"
+        return _insert_after_marker(text, ROWS_MARKER, block)
+
+    # Bound this day's region so we don't leak into other days.
+    day_start = text.index(day_header)
+    nxt = text.find("\n## ", day_start + len(day_header))
+    day_end = nxt + 1 if nxt != -1 else len(text)
+    region = text[day_start:day_end]
+
+    if sub in region:
+        # Top of this platform's rows: just after its table separator.
+        start = day_start + region.index(sub)
+        sep = text.index(_DAY_TABLE_SEP, start)
+        at = text.index("\n", sep) + 1
+        return text[:at] + row + text[at:]
+
+    # New sub-section: place it before the first later-ordered bucket present,
+    # else at the end of the day's region.
+    my_order = _BUCKET_ORDER[heading]
+    insert_at = day_end
+    for _, other in _FIREHOSE_BUCKETS:
+        if _BUCKET_ORDER[other] > my_order and f"### {other}" in region:
+            insert_at = day_start + region.index(f"### {other}")
+            break
+    return text[:insert_at] + _bucket_block(heading, row) + text[insert_at:]
+
+
+def _write_all_events(path: Path, event: dict[str, Any], commit_sha: str) -> bool:
+    """Append the event to the firehose: day-grouped, then per-platform tables.
+
+    An event lands in every platform bucket it touches (a cross-platform commit
+    appears in several), each scoped to that platform's pools. Idempotent per
+    ``commit_sha``. Real events arrive in time order, so a newer day landing on
+    top is the common case.
     """
     if path.exists():
         text = path.read_text(encoding="utf-8")
@@ -411,19 +469,10 @@ def _write_all_events(path: Path, event: dict[str, Any], commit_sha: str) -> boo
         text = _all_events_header()
         path.parent.mkdir(parents=True, exist_ok=True)
 
-    row = render_all_events_row(event)
     day_header = f"## {_event_date(event['timestamp'])}"
-
-    if day_header in text:
-        # Insert at the top of this day's rows: just after its table separator.
-        start = text.index(day_header)
-        sep = text.index(_DAY_TABLE_SEP, start)
-        at = text.index("\n", sep) + 1
-        text = text[:at] + row + text[at:]
-    else:
-        # New day section at the top of the log (right after the marker).
-        block = f"{day_header}\n\n{_DAY_TABLE_HEAD}{row}\n"
-        text = _insert_after_marker(text, ROWS_MARKER, block)
+    for os_name, heading in _event_buckets(event):
+        row = _render_event_row(event, _pools_for_platform(event, os_name))
+        text = _insert_firehose_row(text, day_header, heading, row)
 
     path.write_text(text, encoding="utf-8")
     return True

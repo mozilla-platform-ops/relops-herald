@@ -15,10 +15,10 @@ from pathlib import Path
 
 from herald.ingest import (
     ValidationFailed,
+    _event_buckets,
     _event_date,
     _event_time,
-    _platforms,
-    _pools_cell,
+    _pools_for_platform,
     ingest_event,
     load_schema,
     route_pool,
@@ -129,30 +129,30 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(_event_date("2026-13-99T99:99:99"), "2026-13-99")
         self.assertEqual(_event_time("2026-13-99T99:99:99"), "99:99")
 
-    def test_platforms_explicit_names(self) -> None:
+    def test_event_buckets_by_os_signal(self) -> None:
         ev = self._event([
             {"type": "role", "id": "gecko_1_b_osx_1015", "files": ["a"]},
             {"type": "module", "id": "linux_packages", "files": ["b"]},
         ])
-        # Explicit names, mac/linux/windows order.
-        self.assertEqual(_platforms(ev), "🍎 macOS, 🐧 Linux")
-        # No OS signal anywhere -> "shared".
+        # A cross-platform commit lands in both platform buckets, in order.
+        self.assertEqual(
+            [h for _, h in _event_buckets(ev)], ["🍎 Mac workers", "🐧 Linux workers"]
+        )
+        # No OS signal anywhere -> the Other bucket.
         shared = self._event([{"type": "module", "id": "worker_runner", "files": ["c"]}])
-        self.assertEqual(_platforms(shared), "shared")
+        self.assertEqual([h for _, h in _event_buckets(shared)], ["Other"])
 
-    def test_pools_cell_lists_only_worker_pools(self) -> None:
+    def test_pools_for_platform_scopes_to_that_os(self) -> None:
         ev = self._event([
             {"type": "role", "id": "gecko_1_b_osx_1015", "files": ["r.pp"]},
             {"type": "role-hiera", "id": "gecko_1_b_osx_1015", "files": ["h.yaml"]},
-            {"type": "module", "id": "generic_worker", "files": ["m.pp"]},
+            {"type": "role", "id": "gecko_t_linux_2404_talos", "files": ["l.pp"]},
         ])
-        # role + role-hiera merge to one pool id; the module is not a pool.
-        self.assertEqual(_pools_cell(ev), "`gecko_1_b_osx_1015`")
-        # No pool entities -> em dash.
-        self.assertEqual(
-            _pools_cell(self._event([{"type": "module", "id": "packages", "files": ["a"]}])),
-            "—",
-        )
+        # Mac cell lists only the mac pool (role+hiera merged); linux cell its own.
+        self.assertEqual(_pools_for_platform(ev, "macos"), "`gecko_1_b_osx_1015`")
+        self.assertEqual(_pools_for_platform(ev, "linux"), "`gecko_t_linux_2404_talos`")
+        # The Other bucket never carries pools.
+        self.assertEqual(_pools_for_platform(ev, None), "—")
 
     def test_worker_pool_ids_merge_role_and_hiera(self) -> None:
         ev = self._event([
@@ -202,12 +202,15 @@ class IngestTests(unittest.TestCase):
         self.assertNotIn("module: `generic_worker`", rollup)
         self.assertNotIn("modules/generic_worker/manifests/init.pp", rollup)
 
-        # All-events firehose (a dir under changelogs/): headline, explicit
-        # platform, and the affected worker pool all show.
+        # All-events firehose: headline, under a Linux platform sub-table, with
+        # the affected worker pool and the author in the commit cell.
         firehose = self._read("changelogs/all-events/changelog.md")
         self.assertIn(event["ai_summary"]["headline"], firehose)
-        self.assertIn("🐧 Linux", firehose)
+        self.assertIn("### 🐧 Linux workers", firehose)
         self.assertIn("`gecko_t_linux_2404_talos`", firehose)
+        self.assertIn(f"@{event['actor']}", firehose)
+        # A linux-only change makes no Mac/Windows sub-table.
+        self.assertNotIn("### 🍎 Mac workers", firehose)
 
         # Non-pool entities get no dedicated changelog; other platforms untouched.
         self.assertFalse(self._exists("changelogs/module"))
@@ -273,6 +276,26 @@ class IngestTests(unittest.TestCase):
         self.assertIn("| 11:30 |", log)
         # Within the day, the later event is inserted above the earlier one.
         self.assertLess(log.index("| 11:30 |"), log.index("| 09:00 |"))
+
+    def test_firehose_cross_platform_event_appears_in_each_bucket(self) -> None:
+        event = _load("event-example-success.json")
+        event["timestamp"] = "2026-07-16T09:00:00Z"
+        event["entities"] = [
+            {"type": "role", "id": "gecko_1_b_osx_1015", "files": ["m.pp"]},
+            {"type": "role", "id": "win116424h2hw", "files": ["w.pp"]},
+        ]
+        ingest_event(event, self.tmp)
+        log = self._read("changelogs/all-events/changelog.md")
+        # One day, both a Mac and a Windows sub-table, Mac before Windows.
+        self.assertIn("### 🍎 Mac workers", log)
+        self.assertIn("### 🪟 Windows workers", log)
+        self.assertLess(log.index("### 🍎 Mac workers"), log.index("### 🪟 Windows workers"))
+        # Each sub-table's pool cell is scoped to that platform.
+        mac = log.index("### 🍎 Mac workers")
+        win = log.index("### 🪟 Windows workers")
+        self.assertIn("`gecko_1_b_osx_1015`", log[mac:win])
+        self.assertNotIn("`win116424h2hw`", log[mac:win])
+        self.assertIn("`win116424h2hw`", log[win:])
 
     def test_ingest_is_idempotent_per_commit(self) -> None:
         event = _load("event-example-success.json")

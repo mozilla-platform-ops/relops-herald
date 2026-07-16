@@ -266,6 +266,24 @@ _FIREHOSE_BUCKETS = (
 )
 _BUCKET_ORDER = {heading: i for i, (_, heading) in enumerate(_FIREHOSE_BUCKETS)}
 
+# Column min-widths (in characters) so every platform table renders the same
+# width on GitHub, which sizes tables to content. We set a floor by padding the
+# shared header cells with non-breaking spaces, and cap the two variable cells
+# (Change, Worker pools) so their content never exceeds the floor.
+_COL_FLOOR = {"Change": 80, "Worker pools": 64, "Commit": 22}
+_CHANGE_CAP = 80  # matches the summarizer's "<= 80 chars" headline target
+_POOLS_BUDGET = 48  # chars of pool ids to show before collapsing to "+N more"
+
+
+def _pad_header(label: str) -> str:
+    """Pad a header label with `&nbsp;` to its column floor (min-width hint)."""
+    return label + "&nbsp;" * max(0, _COL_FLOOR.get(label, 0) - len(label))
+
+
+def _truncate(text: str, width: int) -> str:
+    """Trim to ``width`` chars with an ellipsis; leaves shorter text untouched."""
+    return text if len(text) <= width else text[: width - 1].rstrip() + "…"
+
 
 def _utc(timestamp: str) -> datetime | None:
     """Parse an ISO timestamp and normalize to UTC; None if unparseable.
@@ -311,11 +329,28 @@ def _event_buckets(event: dict[str, Any]) -> list[tuple[str | None, str]]:
 
 
 def _pools_for_platform(event: dict[str, Any], os_name: str | None) -> str:
-    """Worker pools of ``os_name`` this event affects, or '—' if none."""
+    """Worker pools of ``os_name`` this event affects, or '—' if none.
+
+    Bounded to ``_POOLS_BUDGET`` chars of ids; the rest collapse to '+N more'
+    (the full list is always in each pool's own changelog) so the column stays
+    within its width floor.
+    """
     if os_name is None:
         return "—"
     ids = [p for p in worker_pool_ids(event) if os_name in _oses_for_id(p)]
-    return ", ".join(f"`{p}`" for p in ids) if ids else "—"
+    if not ids:
+        return "—"
+    shown: list[str] = []
+    used = 0
+    for pid in ids:
+        cost = len(pid) + (2 if shown else 0)  # ", " separator
+        if shown and used + cost > _POOLS_BUDGET:
+            break
+        shown.append(pid)
+        used += cost
+    cell = ", ".join(f"`{p}`" for p in shown)
+    remaining = len(ids) - len(shown)
+    return f"{cell}, +{remaining} more" if remaining else cell
 
 
 def _render_event_row(event: dict[str, Any], pools_cell: str) -> str:
@@ -327,6 +362,7 @@ def _render_event_row(event: dict[str, Any], pools_cell: str) -> str:
         change = event["commit_subject"]
     else:
         change = f"⚠️ {event['commit_subject']} (AI summary unavailable)"
+    change = _truncate(change, _CHANGE_CAP)
     change = change.replace("|", "\\|")  # escape pipes so cells can't break
     sha = event["commit_sha"]
     # Commit cell: short sha link + author; hidden anchor keeps rows idempotent.
@@ -364,7 +400,8 @@ def _rollup_header(label: str) -> str:
 # Per-day, per-platform sub-tables. Date is the `## ` header, platform the `### `.
 _DAY_TABLE_SEP = "|---|---|---|---|"
 _BUCKET_TABLE_HEAD = (
-    f"| Time (UTC) | Change | Worker pools | Commit |\n{_DAY_TABLE_SEP}\n"
+    f"| Time (UTC) | {_pad_header('Change')} | {_pad_header('Worker pools')} "
+    f"| {_pad_header('Commit')} |\n{_DAY_TABLE_SEP}\n"
 )
 
 

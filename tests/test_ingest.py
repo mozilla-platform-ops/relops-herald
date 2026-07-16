@@ -19,6 +19,7 @@ from herald.ingest import (
     _event_date,
     _event_time,
     _pools_for_platform,
+    _truncate,
     ingest_event,
     load_schema,
     route_pool,
@@ -153,6 +154,21 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(_pools_for_platform(ev, "linux"), "`gecko_t_linux_2404_talos`")
         # The Other bucket never carries pools.
         self.assertEqual(_pools_for_platform(ev, None), "—")
+
+    def test_truncate_caps_with_ellipsis(self) -> None:
+        self.assertEqual(_truncate("short", 80), "short")
+        capped = _truncate("x" * 100, 80)
+        self.assertEqual(len(capped), 80)
+        self.assertTrue(capped.endswith("…"))
+
+    def test_pools_for_platform_collapses_past_budget(self) -> None:
+        # Many mac pools -> a few shown, the rest as "+N more" (width-bounded).
+        pools = [f"gecko_{i}_b_osx_1015" for i in range(8)]
+        ev = self._event([{"type": "role", "id": p, "files": ["a"]} for p in pools])
+        cell = _pools_for_platform(ev, "macos")
+        self.assertRegex(cell, r"\+\d+ more$")
+        self.assertLess(cell.index("more"), 70)  # stays within the column floor
+        self.assertEqual(cell.count("+"), 1)
 
     def test_worker_pool_ids_merge_role_and_hiera(self) -> None:
         ev = self._event([

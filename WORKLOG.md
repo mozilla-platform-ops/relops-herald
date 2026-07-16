@@ -120,6 +120,16 @@ Verify once the reporter fires on real merges (trigger flipped to `master`):
 
 ## Log
 
+### 2026-07-16 (firehose v5) — equal-width platform tables (GitHub render)
+- GitHub sizes tables to content, so the skinny Windows table looked shorter.
+  Fixed by giving every platform table the same column floors: pad the shared
+  header cells with `&nbsp;` (Change 80, Worker pools 64, Commit 22) and bound
+  the two variable cells so nothing exceeds the floor — Change capped at 80 chars
+  (`_truncate`, matches the summarizer's ≤80 headline target), Worker pools shown
+  to a ~48-char budget then `+N more` (full list still in each pool changelog).
+- New `_pad_header` / `_truncate` / `_COL_FLOOR` / `_CHANGE_CAP` / `_POOLS_BUDGET`.
+  26 tests. Migrated the live file (revert row's 14 pools → `+13 more`).
+
 ### 2026-07-16 (reporter) — attribute events to the PR author
 - Changed ronin's `report.yml` (on `herald-reporter-dev`) so the event `actor`
   is the **PR author** (`.user.login` from `commits/<sha>/pulls`), not the pusher.

@@ -11,12 +11,12 @@ not appended to.
 
 ## Current state (as of 2026-07-15)
 
-**Phase:** POC **wired end-to-end with the real AI summarizer, verified live**,
-now with **multi-view changelog fan-out** in the ingester (on branch
-`add-fanout-views`). A role change in ronin_puppet is summarized by Claude
-(Sonnet 5) on the diff, dispatched to relops-herald, and rendered into committed
-changelogs. Reporter is still scoped to a build branch (`herald-reporter-dev`),
-not master.
+**Phase:** POC **wired end-to-end with the real AI summarizer, and the
+platform-organized changelog tree validated live** via a 20-commit replay from
+real ronin history (2026-07-16). A role change in ronin_puppet is summarized by
+Claude (Sonnet) on the diff, dispatched to relops-herald, and rendered into the
+committed `worker-pool/{mac,linux,windows}` + `all-events` tree. Reporter is
+still scoped to a build branch (`herald-reporter-dev`), not master.
 
 **What exists:**
 - `README.md` — project overview, POC scope, intended data flow.
@@ -110,6 +110,27 @@ not master.
 ---
 
 ## Log
+
+### 2026-07-16 (later) — live end-to-end replay validated the platform tree
+- Ran the **replay test method** against real ronin history to exercise the new
+  routing live (see memory `herald-replay-test-method`). In a dedicated clone
+  (`claude_scratch/ronin_puppet_herald`) on **`herald-reporter-dev`** — the branch
+  ronin master's `report.yml` actually watches/dispatches from (NOT
+  `herald-reporter-scaffold`, which is an artifact-only tooling experiment) —
+  kept the Herald tooling, bulk-reverted 20 real ronin commits (one baseline-reset
+  event), then re-applied them one at a time, serialized so relops-herald ingest
+  commits to `main` don't race.
+- Results: 20 re-applies → **17 dispatched+ingested, 3 self-skipped** (mapped to no
+  in-scope entity — the skip path). Injected windows + linux role touches since the
+  window lacked them. Full pipeline green every time: push → `report.yml`
+  (map_entities → real Claude Sonnet summary → App-token dispatch) → relops-herald
+  `ingest.yml` → commit to `main`.
+- **Routing confirmed against real data:** `worker-pool/mac/` = 14 pools + rollup;
+  `worker-pool/linux/hardware/` = `gecko_t_linux_2404_talos` + rollup;
+  `worker-pool/windows/hardware/` = `win116424h2hw`; `worker-pool/windows/azure/` =
+  `win116424h2azure`; all-events firehose = 21 rows. role+role-hiera merge, and
+  module/profile/common-data → firehose-only, both verified. Linux only appears
+  when a linux *role/hiera* file changes (linux *module* changes are firehose-only).
 
 ### 2026-07-16 — restructured into a platform-organized changelog tree
 - Reworked the layout again per design discussion. Dropped the by-os rollups

@@ -1,7 +1,7 @@
 """CLI entrypoint: ``python -m herald --event <file> [--root .]``.
 
 Reads a change event from a file (or stdin with ``--event -``), validates it,
-and renders the changelog + activity outputs into the repo at ``--root``.
+and renders the worker-pool changelogs + all-events firehose into ``--root``.
 """
 
 from __future__ import annotations
@@ -51,8 +51,8 @@ def main(argv: list[str] | None = None) -> int:
     else:
         for path in result.all_written:
             print(f"herald: wrote {path}")
-        if result.activity_written:
-            print("herald: updated activity.md")
+        if result.all_events_written:
+            print("herald: updated changelogs/all-events/changelog.md")
     return 0
 
 

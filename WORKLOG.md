@@ -23,17 +23,18 @@ not master.
 - `schema/event.schema.json` — the change-event contract (JSON Schema draft 2020-12).
 - `examples/event-example-*.json` — happy-path + AI-failure events.
 - `herald/` — the ingester/renderer (`python -m herald --event <f> --root .`);
-  validates the event, fans each event out into **four newest-first views**,
+  validates the event, fans it into a **platform-organized changelog tree**,
   idempotent per commit_sha:
-  - `activity.md` — the relops-all firehose (one table row per change).
-  - `changelogs/worker-pools/<id>.md` — per worker pool (the *role level*):
-    merges `role` + `role-hiera` entities sharing an id.
-  - `changelogs/by-os/<macos|linux|windows>.md` — per-OS rollups; OS derived
-    from entity-id naming, and a change with no OS signal fans out to all three.
-  - `changelogs/<type>/<id>.md` — per-entity for the remaining types
-    (`module | profile | os-data | common-data`).
-- `tests/test_ingest.py` — 16 stdlib-unittest tests (schema contract + OS/pool
-  grouping + fan-out rendering).
+  - `changelogs/all-events/changelog.md` — the firehose (one table row/change).
+  - `changelogs/worker-pool/<platform>/[<class>/]<pool>.md` — one changelog per
+    worker pool (= role name); `role` + `role-hiera` sharing an id merge. Routed
+    by OS from the role name: `mac/` (all hardware), `linux/hardware/`
+    (`linux/gcp/` reserved), `windows/hardware/` or `windows/azure/` (role name
+    contains `azure`).
+  - `changelogs/worker-pool/<platform>/[<class>/]all-*.md` — per-class rollup.
+  - Non-pool changes (module/profile/os-data/common-data) → firehose only, for now.
+- `tests/test_ingest.py` — 19 stdlib-unittest tests (schema contract + routing +
+  fan-out rendering).
 - `.github/workflows/ingest.yml` — repository_dispatch receiver (render + commit).
 - `reporter-templates/ronin_puppet/` — copy-into-ronin reporter: workflow +
   `map_entities.py` / `summarize.py` (placeholder AI) / `build_event.py`.
@@ -109,6 +110,27 @@ not master.
 ---
 
 ## Log
+
+### 2026-07-16 — restructured into a platform-organized changelog tree
+- Reworked the layout again per design discussion. Dropped the by-os rollups
+  and per-entity-type changelogs; the tree is now:
+  - `changelogs/all-events/changelog.md` — firehose (was root `activity.md`).
+  - `changelogs/worker-pool/<platform>/[<class>/]<pool>.md` + a per-class
+    `all-*.md` rollup beside it. Platforms: `mac/` (all hardware),
+    `linux/hardware/` (`linux/gcp/` reserved for a future cloud reporter),
+    `windows/hardware/` and `windows/azure/`.
+- **Routing rules** (from role name): mac if osx/mac/darwin; linux if
+  linux/debian/ubuntu (→ hardware for now); windows if `windows` or a delimited
+  `win` token (→ azure iff name contains `azure`, else hardware). "darwin" is
+  guarded against matching windows via a token regex. Unroutable pools (no OS
+  signal) appear in the firehose only.
+- Non-pool changes (module/profile/os-data/common-data) go to the firehose only
+  for now; `role`+`role-hiera` sharing an id still merge into one pool log.
+- Removed stale old-layout artifacts (`activity.md`, `changelogs/role/*`,
+  `changelogs/role-hiera/*`). Updated README + `ingest.yml` (`git add changelogs`).
+- Tests 16 → 19 (routing incl. win2022/azure/darwin cases, role+hiera merge,
+  firehose-only for module changes). All pass; verified via the CLI on mac,
+  linux, and windows/azure synthetic events.
 
 ### 2026-07-15 — multi-view changelog fan-out (branch `add-fanout-views`)
 - Reworked the ingester renderer to fan each event into **four views** instead

@@ -15,9 +15,9 @@ from pathlib import Path
 
 from herald.ingest import (
     ValidationFailed,
-    classify_oses,
     ingest_event,
     load_schema,
+    route_pool,
     validate_event,
     worker_pool_ids,
 )
@@ -70,44 +70,47 @@ class SchemaContractTests(unittest.TestCase):
             validate_event(bad, self.schema)
 
 
-class GroupingTests(unittest.TestCase):
-    """OS derivation and worker-pool grouping (pure functions, no I/O)."""
+class RoutingTests(unittest.TestCase):
+    """Worker-pool routing and grouping (pure functions, no I/O)."""
 
     def _event(self, entities: list[dict]) -> dict:
         ev = _load("event-example-success.json")
         ev["entities"] = entities
         return ev
 
-    def test_os_derived_from_role_name(self) -> None:
-        self.assertEqual(
-            classify_oses(self._event([{"type": "role", "id": "gecko_t_linux_2404_talos", "files": ["a"]}])),
-            ["linux"],
-        )
-        self.assertEqual(
-            classify_oses(self._event([{"type": "role", "id": "gecko_1_b_osx_1015", "files": ["a"]}])),
-            ["macos"],
-        )
-        self.assertEqual(
-            classify_oses(self._event([{"type": "role", "id": "win116424h2hw", "files": ["a"]}])),
-            ["windows"],
-        )
+    def test_mac_role_routes_to_mac(self) -> None:
+        route = route_pool("gecko_1_b_osx_1015")
+        self.assertEqual(route.directory, Path("changelogs/worker-pool/mac"))
+        self.assertEqual(route.rollup, "all-mac.md")
 
-    def test_os_data_ids_classify(self) -> None:
+    def test_linux_role_routes_to_linux_hardware(self) -> None:
+        route = route_pool("gecko_t_linux_2404_talos")
         self.assertEqual(
-            classify_oses(self._event([{"type": "os-data", "id": "Darwin", "files": ["a"]}])),
-            ["macos"],
+            route.directory, Path("changelogs/worker-pool/linux/hardware")
         )
+        self.assertEqual(route.rollup, "all-linux.md")
 
-    def test_no_os_signal_fans_out_to_all(self) -> None:
-        # A shared module change has no OS in its id → all three OS logs.
+    def test_windows_role_routes_to_windows_hardware(self) -> None:
+        route = route_pool("gecko_1_b_win2022_hw")
         self.assertEqual(
-            classify_oses(self._event([{"type": "module", "id": "generic_worker", "files": ["a"]}])),
-            ["macos", "linux", "windows"],
+            route.directory, Path("changelogs/worker-pool/windows/hardware")
         )
+        self.assertEqual(route.rollup, "all-windows.md")
+
+    def test_windows_azure_role_routes_to_azure(self) -> None:
+        route = route_pool("gecko_1_b_win2022_azure")
+        self.assertEqual(
+            route.directory, Path("changelogs/worker-pool/windows/azure")
+        )
+        self.assertEqual(route.rollup, "all-windows-azure.md")
 
     def test_darwin_not_misread_as_windows(self) -> None:
-        # "darwin" contains "win" but must not classify as windows.
-        self.assertNotIn("windows", classify_oses(self._event([{"type": "os-data", "id": "Darwin", "files": ["a"]}])))
+        # "darwin" contains "win" but must classify as mac, not windows.
+        route = route_pool("gecko_t_osx_darwin")
+        self.assertEqual(route.directory, Path("changelogs/worker-pool/mac"))
+
+    def test_no_os_signal_is_unroutable(self) -> None:
+        self.assertIsNone(route_pool("generic_worker"))
 
     def test_worker_pool_ids_merge_role_and_hiera(self) -> None:
         ev = self._event([
@@ -135,55 +138,79 @@ class IngestTests(unittest.TestCase):
     def _exists(self, rel: str) -> bool:
         return (self.tmp / rel).exists()
 
-    def test_success_event_fans_out_to_all_views(self) -> None:
-        event = _load("event-example-success.json")  # role, profile, module (linux/talos)
+    def test_success_event_routes_to_linux_hardware(self) -> None:
+        event = _load("event-example-success.json")  # role, profile, module (linux talos)
         result = ingest_event(event, self.tmp)
         self.assertFalse(result.skipped_duplicate)
-        self.assertTrue(result.activity_written)
+        self.assertTrue(result.all_events_written)
 
-        # Per-entity: profile + module get files; role/role-hiera do NOT.
-        self.assertTrue(self._exists("changelogs/module/generic_worker.md"))
-        self.assertTrue(self._exists("changelogs/profile/gecko_t_linux_2404_talos_generic_worker.md"))
-        self.assertFalse(self._exists("changelogs/role/gecko_t_linux_2404_talos.md"))
-
-        # Worker-pool view exists for the role.
-        pool = self._read("changelogs/worker-pools/gecko_t_linux_2404_talos.md")
+        # Per-pool changelog for the role, under linux/hardware.
+        pool = self._read(
+            "changelogs/worker-pool/linux/hardware/gecko_t_linux_2404_talos.md"
+        )
         self.assertIn("# worker pool: gecko_t_linux_2404_talos", pool)
         self.assertIn(event["ai_summary"]["description"], pool)
 
-        # OS rollup: linux only (talos role has a linux signal).
-        self.assertTrue(self._exists("changelogs/by-os/linux.md"))
-        self.assertFalse(self._exists("changelogs/by-os/windows.md"))
-        os_log = self._read("changelogs/by-os/linux.md")
-        self.assertIn("Entities:", os_log)  # event-scoped entry lists entities
+        # Per-class rollup beside it.
+        rollup = self._read("changelogs/worker-pool/linux/hardware/all-linux.md")
+        self.assertIn("all linux hardware worker pools", rollup)
+        # Rollup lists only the pool entity, not the module/profile entities
+        # or their files (the module name still appears in the AI prose).
+        self.assertIn("role: `gecko_t_linux_2404_talos`", rollup)
+        self.assertNotIn("module: `generic_worker`", rollup)
+        self.assertNotIn("modules/generic_worker/manifests/init.pp", rollup)
 
-        # relops-all firehose.
-        activity = self._read("activity.md")
-        self.assertIn(event["ai_summary"]["headline"], activity)
+        # All-events firehose (a dir under changelogs/).
+        firehose = self._read("changelogs/all-events/changelog.md")
+        self.assertIn(event["ai_summary"]["headline"], firehose)
 
-    def test_no_os_change_fans_out_to_three_os_logs(self) -> None:
+        # Non-pool entities get no dedicated changelog; other platforms untouched.
+        self.assertFalse(self._exists("changelogs/module"))
+        self.assertFalse(self._exists("changelogs/worker-pool/mac"))
+        self.assertFalse(self._exists("changelogs/worker-pool/windows"))
+
+    def test_module_only_change_lands_in_firehose_only(self) -> None:
         event = _load("event-example-success.json")
-        event["entities"] = [{"type": "module", "id": "generic_worker", "files": ["modules/generic_worker/manifests/init.pp"]}]
-        ingest_event(event, self.tmp)
-        for os_name in ("macos", "linux", "windows"):
-            self.assertTrue(self._exists(f"changelogs/by-os/{os_name}.md"), os_name)
-        # No worker pool for a module-only change.
-        self.assertFalse((self.tmp / "changelogs/worker-pools").exists())
+        event["entities"] = [
+            {"type": "module", "id": "generic_worker",
+             "files": ["modules/generic_worker/manifests/init.pp"]}
+        ]
+        result = ingest_event(event, self.tmp)
+        self.assertTrue(result.all_events_written)
+        self.assertEqual(result.all_written, [])  # no pool/rollup logs
+        self.assertTrue(self._exists("changelogs/all-events/changelog.md"))
+        self.assertFalse(self._exists("changelogs/worker-pool"))
 
     def test_ai_failure_event_renders_stub(self) -> None:
-        event = _load("event-example-ai-failure.json")  # module macos_ntp
+        event = _load("event-example-ai-failure.json")  # error-shaped ai_summary
+        event["entities"] = [
+            {"type": "role", "id": "gecko_1_b_osx_1015", "files": ["r.pp"]}
+        ]
         ingest_event(event, self.tmp)
-        entry = self._read("changelogs/module/macos_ntp.md")
+        entry = self._read("changelogs/worker-pool/mac/gecko_1_b_osx_1015.md")
         self.assertIn("AI summary unavailable", entry)
         self.assertIn(event["ai_summary"]["error"], entry)
+
+    def test_role_and_hiera_merge_into_one_pool_changelog(self) -> None:
+        event = _load("event-example-success.json")
+        event["entities"] = [
+            {"type": "role", "id": "gecko_1_b_osx_1015", "files": ["role.pp"]},
+            {"type": "role-hiera", "id": "gecko_1_b_osx_1015", "files": ["hiera.yaml"]},
+        ]
+        result = ingest_event(event, self.tmp)
+        # A single per-pool file, holding both files.
+        self.assertEqual(len(result.pool_logs), 1)
+        pool = self._read("changelogs/worker-pool/mac/gecko_1_b_osx_1015.md")
+        self.assertIn("`role.pp`", pool)
+        self.assertIn("`hiera.yaml`", pool)
 
     def test_ingest_is_idempotent_per_commit(self) -> None:
         event = _load("event-example-success.json")
         ingest_event(event, self.tmp)
-        before = self._read("activity.md")
+        before = self._read("changelogs/all-events/changelog.md")
         second = ingest_event(event, self.tmp)
         self.assertTrue(second.skipped_duplicate)
-        self.assertEqual(before, self._read("activity.md"))
+        self.assertEqual(before, self._read("changelogs/all-events/changelog.md"))
 
     def test_newest_entry_is_inserted_first(self) -> None:
         older = _load("event-example-success.json")
@@ -193,7 +220,9 @@ class IngestTests(unittest.TestCase):
         newer["commit_subject"] = "A newer change"
         ingest_event(older, self.tmp)
         ingest_event(newer, self.tmp)
-        pool = self._read("changelogs/worker-pools/gecko_t_linux_2404_talos.md")
+        pool = self._read(
+            "changelogs/worker-pool/linux/hardware/gecko_t_linux_2404_talos.md"
+        )
         self.assertLess(
             pool.index("A newer change"),
             pool.index(older["commit_subject"]),

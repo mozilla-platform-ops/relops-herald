@@ -7,8 +7,11 @@ Herald is a GitHub repository and automation system that collects change events
 from RelOps and adjacent repositories (ronin, worker-images, fxci-config, infra
 code) and produces:
 
-1. Entity-scoped Markdown changelogs (one file per role/profile/module).
-2. A central activity log (`activity.md`) — every notable change in one stream.
+1. Per-worker-pool Markdown changelogs, grouped by platform and hardware class
+   (`changelogs/worker-pool/<platform>/[<class>/]<pool>.md`), each with a
+   per-class "all-*" rollup beside it.
+2. A central all-events log (`changelogs/all-events/changelog.md`) — every
+   change we collect in one stream.
 3. Slack digest notifications (deferred; not in POC).
 
 The goal is to reduce manual cross-repo correlation, improve rollout visibility
@@ -41,10 +44,21 @@ tests/
   ingest.yml            # repository_dispatch receiver: render + commit back
 reporter-templates/
   ronin_puppet/         # copy-into-ronin reporter (workflow + helper scripts)
-changelogs/
-  <entity_type>/<entity_id>.md   # per-entity changelogs (written by Herald)
-activity.md             # central activity log (written by Herald)
+changelogs/                        # all outputs, written by Herald
+  all-events/changelog.md          # firehose: every change we collect
+  worker-pool/
+    mac/{all-mac,<pool>}.md        # mac is all hardware (no class subdir)
+    linux/hardware/{all-linux,<pool>}.md
+    windows/hardware/{all-windows,<pool>}.md
+    windows/azure/{all-windows-azure,<pool>}.md
 ```
+
+A *worker pool* is the role name; `role` and `role-hiera` entities sharing an
+id merge into one pool changelog. Pools are routed by OS derived from the role
+name; linux workers are treated as hardware for now (`linux/gcp/` is reserved),
+and windows workers are hardware unless the role name contains `azure`. Changes
+that don't name a worker pool (module / profile / os-data / common-data) appear
+in the all-events firehose only, for now.
 
 ## Running the ingester
 
@@ -63,7 +77,8 @@ python -m unittest discover -s tests      # tests (needs only jsonschema)
 3. The reporter emits a JSON event matching `schema/event.schema.json` via
    GitHub `repository_dispatch` to this repo.
 4. A workflow here validates the event, appends entries to the relevant
-   per-entity changelog and to `activity.md`, and commits the result back.
+   per-worker-pool changelogs, their per-class rollups, and the all-events
+   firehose, and commits the result back.
 
 If the AI call fails, the event still flows: `ai_summary.description` is
 `null`, `ai_summary.error` describes why, and Herald renders a stub entry

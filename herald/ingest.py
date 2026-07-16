@@ -1,15 +1,23 @@
 """Herald ingester / renderer.
 
 Turns a validated change event (see ``schema/event.schema.json``) into Markdown,
-fanning each event out into several views:
+fanning each event out into a small set of views under ``changelogs/``:
 
-* ``activity.md`` — the relops-all firehose (one table row per change)
-* ``changelogs/worker-pools/<id>.md`` — per worker pool (the *role level*):
-  merges the ``role`` and ``role-hiera`` entities that share an id
-* ``changelogs/by-os/<macos|linux|windows>.md`` — per-OS rollup. OS is derived
-  from entity ids; a change with no OS-specific entity fans out to all three.
-* ``changelogs/<type>/<id>.md`` — per-entity changelog for the remaining entity
-  types (``module``, ``profile``, ``os-data``, ``common-data``)
+* ``changelogs/all-events/changelog.md`` — the firehose: one table row per
+  change we collect, across every reporter repo.
+* ``changelogs/worker-pool/<platform>/[<class>/]<pool>.md`` — one changelog per
+  worker pool. A *worker pool* is the role name; ``role`` and ``role-hiera``
+  entities that share an id are merged into it. Pools are routed by platform:
+    - ``mac/`` — mac is all hardware, so no class subdir.
+    - ``linux/hardware/`` — ronin_puppet linux workers are all hardware for now
+      (``linux/gcp/`` is reserved for a future cloud reporter).
+    - ``windows/hardware/`` — windows workers, unless the role name contains
+      ``azure`` → ``windows/azure/``.
+* ``changelogs/worker-pool/<platform>/[<class>/]all-<...>.md`` — a per-class
+  rollup ("all mac", "all linux", ...) sitting beside that class's pools.
+
+Changes that don't name a worker pool (module / profile / os-data / common-data)
+are recorded in the all-events firehose only, for now.
 
 All outputs are **newest-first** and **idempotent**: re-ingesting the same
 commit is a no-op (each entry carries a ``<!-- herald:commit=<sha> -->`` anchor,
@@ -24,9 +32,10 @@ the ``client_payload`` to :func:`ingest_event`. It is also runnable as a CLI:
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 try:
     from jsonschema import Draft202012Validator
@@ -38,18 +47,12 @@ except ImportError as exc:  # pragma: no cover - dependency guard
 # Repo layout, relative to the repo root passed into ingest_event().
 SCHEMA_REL = Path("schema/event.schema.json")
 CHANGELOGS_DIR = Path("changelogs")
-OS_DIR = CHANGELOGS_DIR / "by-os"
-WORKER_POOL_DIR = CHANGELOGS_DIR / "worker-pools"
-ACTIVITY_FILE = "activity.md"
+WORKER_POOL_DIR = CHANGELOGS_DIR / "worker-pool"
+ALL_EVENTS_FILE = CHANGELOGS_DIR / "all-events" / "changelog.md"
 
-# Entity types that get their own per-entity changelog. role / role-hiera are
-# excluded because they roll up into the per-worker-pool view instead.
-PER_ENTITY_TYPES = {"module", "profile", "os-data", "common-data"}
-# Entity types that identify a worker pool (the "role level").
+# Entity types that identify a worker pool (the "role level"). role + role-hiera
+# sharing an id merge into a single per-pool changelog.
 WORKER_POOL_TYPES = {"role", "role-hiera"}
-
-# OS logs, in a stable order. A change with no OS-specific entity fans out to all.
-ALL_OSES = ("macos", "linux", "windows")
 
 # Sentinel comments marking where new content is inserted (newest-first).
 ENTRIES_MARKER = "<!-- HERALD:ENTRIES -->"
@@ -64,19 +67,31 @@ class ValidationFailed(HeraldError):
     """Raised when an event does not satisfy the schema."""
 
 
+@dataclass(frozen=True)
+class PoolRoute:
+    """Where a worker pool's changelogs live, and how to label them.
+
+    ``directory`` is relative to the repo root; ``rollup`` is the filename of the
+    per-class "all-*" rollup that sits beside the pools in that directory.
+    """
+
+    directory: Path
+    rollup: str
+    label: str
+
+
 @dataclass
 class IngestResult:
     """What a single ingest touched."""
 
-    entity_logs: list[Path] = field(default_factory=list)
-    worker_pool_logs: list[Path] = field(default_factory=list)
-    os_logs: list[Path] = field(default_factory=list)
-    activity_written: bool = False
+    pool_logs: list[Path] = field(default_factory=list)
+    rollup_logs: list[Path] = field(default_factory=list)
+    all_events_written: bool = False
     skipped_duplicate: bool = False
 
     @property
     def all_written(self) -> list[Path]:
-        return self.entity_logs + self.worker_pool_logs + self.os_logs
+        return self.pool_logs + self.rollup_logs
 
 
 def load_schema(root: Path) -> dict[str, Any]:
@@ -100,7 +115,12 @@ def validate_event(event: dict[str, Any], schema: dict[str, Any]) -> None:
         raise ValidationFailed(f"event failed schema validation:\n{detail}")
 
 
-# --- OS classification & grouping ----------------------------------------
+# --- OS classification & worker-pool routing ------------------------------
+
+
+# "win" as a delimited token (start or after a non-letter): matches win2022,
+# win10, win_hw, win116424h2hw — but NOT "darwin", where 'win' follows a letter.
+_WIN_TOKEN = re.compile(r"(?:^|[^a-z])win")
 
 
 def _oses_for_id(entity_id: str) -> set[str]:
@@ -111,17 +131,41 @@ def _oses_for_id(entity_id: str) -> set[str]:
         oses.add("macos")
     if "linux" in s or "debian" in s or "ubuntu" in s:
         oses.add("linux")
-    if s.startswith("win") or "windows" in s:
+    if "windows" in s or _WIN_TOKEN.search(s):
         oses.add("windows")
     return oses
 
 
-def classify_oses(event: dict[str, Any]) -> list[str]:
-    """OS logs this event belongs in. No OS signal → all three (fan out)."""
-    found: set[str] = set()
-    for entity in event["entities"]:
-        found |= _oses_for_id(entity["id"])
-    return [os_name for os_name in ALL_OSES if os_name in found] or list(ALL_OSES)
+def route_pool(pool_id: str) -> PoolRoute | None:
+    """Route a worker-pool id to its platform/class directory + rollup.
+
+    Returns ``None`` when the id carries no OS signal (we can't place it, so it
+    lives in the all-events firehose only). Precedence mac > linux > windows for
+    the (rare) case an id matches more than one.
+    """
+    s = pool_id.lower()
+    oses = _oses_for_id(pool_id)
+    if "macos" in oses:
+        # mac is all hardware — no class subdir.
+        return PoolRoute(WORKER_POOL_DIR / "mac", "all-mac.md", "mac")
+    if "linux" in oses:
+        # ronin_puppet linux workers are all hardware for now; gcp reserved.
+        return PoolRoute(
+            WORKER_POOL_DIR / "linux" / "hardware", "all-linux.md", "linux hardware"
+        )
+    if "windows" in oses:
+        if "azure" in s:
+            return PoolRoute(
+                WORKER_POOL_DIR / "windows" / "azure",
+                "all-windows-azure.md",
+                "windows Azure",
+            )
+        return PoolRoute(
+            WORKER_POOL_DIR / "windows" / "hardware",
+            "all-windows.md",
+            "windows hardware",
+        )
+    return None
 
 
 def worker_pool_ids(event: dict[str, Any]) -> list[str]:
@@ -131,7 +175,7 @@ def worker_pool_ids(event: dict[str, Any]) -> list[str]:
     )
 
 
-def _files_for(event: dict[str, Any], predicate) -> list[str]:
+def _files_for(event: dict[str, Any], predicate: Callable) -> list[str]:
     return sorted(
         {f for e in event["entities"] if predicate(e) for f in e["files"]}
     )
@@ -155,8 +199,17 @@ def _summary_text(ai: dict[str, Any]) -> str:
     return f"_AI summary unavailable: {ai.get('error') or 'unknown error'}_"
 
 
-def _entry(event: dict[str, Any], files: list[str], *, show_entities: bool) -> str:
-    """Core changelog entry: heading, meta, summary, (entities,) files, tags."""
+def _entry(
+    event: dict[str, Any],
+    files: list[str],
+    *,
+    entities: list[dict[str, Any]] | None = None,
+) -> str:
+    """Core changelog entry: heading, meta, summary, (entities,) files, tags.
+
+    ``entities`` lists the entities to show under an "Entities:" section; pass
+    ``None`` to omit that section (per-pool entries don't need it).
+    """
     ai = event["ai_summary"]
     meta = [_commit_link(event), event["timestamp"], f"@{event['actor']}"]
     if event.get("pr_number"):
@@ -171,9 +224,9 @@ def _entry(event: dict[str, Any], files: list[str], *, show_entities: bool) -> s
         _summary_text(ai),
         "",
     ]
-    if show_entities:
+    if entities is not None:
         lines.append("Entities:")
-        lines += [f"  - {e['type']}: `{e['id']}`" for e in event["entities"]]
+        lines += [f"  - {e['type']}: `{e['id']}`" for e in entities]
         lines.append("")
     lines.append("Files:")
     lines += [f"  - `{f}`" for f in files]
@@ -183,27 +236,25 @@ def _entry(event: dict[str, Any], files: list[str], *, show_entities: bool) -> s
     return "\n".join(lines) + "\n"
 
 
-def render_entity_entry(event: dict[str, Any], entity: dict[str, Any]) -> str:
-    """Per-entity entry, scoped to that entity's files."""
-    return _entry(event, sorted(entity["files"]), show_entities=False)
-
-
-def render_worker_pool_entry(event: dict[str, Any], pool_id: str) -> str:
+def render_pool_entry(event: dict[str, Any], pool_id: str) -> str:
     """Per-worker-pool entry: files from role/role-hiera entities for this id."""
     files = _files_for(
         event, lambda e: e["type"] in WORKER_POOL_TYPES and e["id"] == pool_id
     )
-    return _entry(event, files, show_entities=False)
+    return _entry(event, files)
 
 
-def render_event_entry(event: dict[str, Any]) -> str:
-    """Commit-scoped entry (all entities + files) for the OS rollups."""
-    files = _files_for(event, lambda e: True)
-    return _entry(event, files, show_entities=True)
+def render_rollup_entry(event: dict[str, Any], pool_ids: list[str]) -> str:
+    """Per-class rollup entry, scoped to the pools in that class."""
+    ids = set(pool_ids)
+    pred = lambda e: e["type"] in WORKER_POOL_TYPES and e["id"] in ids
+    files = _files_for(event, pred)
+    entities = [e for e in event["entities"] if pred(e)]
+    return _entry(event, files, entities=entities)
 
 
-def render_activity_row(event: dict[str, Any]) -> str:
-    """Render one central-activity table row for the whole event."""
+def render_all_events_row(event: dict[str, Any]) -> str:
+    """Render one all-events firehose table row for the whole event."""
     ai = event["ai_summary"]
     entities = ", ".join(f"{e['type']}:{e['id']}" for e in event["entities"])
     if ai.get("headline"):
@@ -215,8 +266,8 @@ def render_activity_row(event: dict[str, Any]) -> str:
     # Escape pipes so cell content can't break the table.
     change = change.replace("|", "\\|")
     entities = entities.replace("|", "\\|")
-    # The commit cell carries a hidden anchor so activity rows are idempotent
-    # per commit, just like the changelog entries. The comment renders invisibly.
+    # The commit cell carries a hidden anchor so rows are idempotent per commit,
+    # just like the changelog entries. The comment renders invisibly.
     commit_cell = f"{_commit_link(event)}<!-- herald:commit={event['commit_sha']} -->"
     return (
         f"| {event['timestamp']} | {event['source_repo']} | {entities} "
@@ -227,38 +278,29 @@ def render_activity_row(event: dict[str, Any]) -> str:
 # --- file headers ---------------------------------------------------------
 
 
-def _entity_file_header(entity: dict[str, Any]) -> str:
-    return (
-        f"# {entity['type']}: {entity['id']}\n\n"
-        f"Changelog for `{entity['id']}` ({entity['type']}), maintained by "
-        f"RelOps Herald. Newest entries first.\n\n"
-        f"{ENTRIES_MARKER}\n"
-    )
-
-
-def _worker_pool_header(pool_id: str) -> str:
+def _pool_header(pool_id: str, label: str) -> str:
     return (
         f"# worker pool: {pool_id}\n\n"
-        f"Changelog for the `{pool_id}` worker pool (role + role Hiera), "
+        f"Changelog for the `{pool_id}` {label} worker pool (role + role Hiera), "
         f"maintained by RelOps Herald. Newest entries first.\n\n"
         f"{ENTRIES_MARKER}\n"
     )
 
 
-def _os_file_header(os_name: str) -> str:
+def _rollup_header(label: str) -> str:
     return (
-        f"# OS activity: {os_name}\n\n"
-        f"All changes affecting {os_name} workers, maintained by RelOps Herald. "
-        f"Newest first. Changes with no OS-specific entity appear in every OS "
-        f"log.\n\n{ENTRIES_MARKER}\n"
+        f"# all {label} worker pools\n\n"
+        f"Every change across all {label} worker pools, maintained by RelOps "
+        f"Herald. Newest first.\n\n"
+        f"{ENTRIES_MARKER}\n"
     )
 
 
-def _activity_header() -> str:
+def _all_events_header() -> str:
     return (
-        "# Activity (relops-all)\n\n"
-        "Every change across all reporter repos, maintained by RelOps Herald. "
-        "Newest first.\n\n"
+        "# All events\n\n"
+        "Every change we collect across all reporter repos, maintained by "
+        "RelOps Herald. Newest first.\n\n"
         "| When (UTC) | Repo | Entities | Change | Commit |\n"
         "|---|---|---|---|---|\n"
         f"{ROWS_MARKER}\n"
@@ -302,8 +344,8 @@ def ingest_event(
 ) -> IngestResult:
     """Validate and render one change event into the tree at ``root``.
 
-    Fans out into per-entity, per-worker-pool, per-OS, and relops-all views.
-    Idempotent per ``commit_sha``.
+    Fans out into per-worker-pool changelogs, per-class rollups, and the
+    all-events firehose. Idempotent per ``commit_sha``.
     """
     root = Path(root)
     if validate:
@@ -312,53 +354,48 @@ def ingest_event(
     sha = event["commit_sha"]
     result = IngestResult()
 
-    # Per-entity changelogs (module / profile / os-data / common-data).
-    for entity in event["entities"]:
-        if entity["type"] not in PER_ENTITY_TYPES:
-            continue
-        path = root / CHANGELOGS_DIR / entity["type"] / f"{entity['id']}.md"
-        if _write_newest_first(
-            path,
-            _entity_file_header(entity),
-            ENTRIES_MARKER,
-            render_entity_entry(event, entity),
-            sha,
-        ):
-            result.entity_logs.append(path)
-
-    # Per-worker-pool (role level): role + role-hiera merged by id.
+    # Group the touched worker pools by the class directory they route to, so
+    # each class's per-pool logs and its rollup are written together. Pools with
+    # no OS signal are skipped here (they still land in the all-events firehose).
+    by_route: dict[PoolRoute, list[str]] = {}
     for pool_id in worker_pool_ids(event):
-        path = root / WORKER_POOL_DIR / f"{pool_id}.md"
+        route = route_pool(pool_id)
+        if route is not None:
+            by_route.setdefault(route, []).append(pool_id)
+
+    for route, pool_ids in by_route.items():
+        for pool_id in pool_ids:
+            path = root / route.directory / f"{pool_id}.md"
+            if _write_newest_first(
+                path,
+                _pool_header(pool_id, route.label),
+                ENTRIES_MARKER,
+                render_pool_entry(event, pool_id),
+                sha,
+            ):
+                result.pool_logs.append(path)
+
+        rollup_path = root / route.directory / route.rollup
         if _write_newest_first(
-            path,
-            _worker_pool_header(pool_id),
+            rollup_path,
+            _rollup_header(route.label),
             ENTRIES_MARKER,
-            render_worker_pool_entry(event, pool_id),
+            render_rollup_entry(event, pool_ids),
             sha,
         ):
-            result.worker_pool_logs.append(path)
+            result.rollup_logs.append(rollup_path)
 
-    # Per-OS rollups.
-    for os_name in classify_oses(event):
-        path = root / OS_DIR / f"{os_name}.md"
-        if _write_newest_first(
-            path,
-            _os_file_header(os_name),
-            ENTRIES_MARKER,
-            render_event_entry(event),
-            sha,
-        ):
-            result.os_logs.append(path)
-
-    # relops-all firehose.
-    result.activity_written = _write_newest_first(
-        root / ACTIVITY_FILE,
-        _activity_header(),
+    # All-events firehose.
+    result.all_events_written = _write_newest_first(
+        root / ALL_EVENTS_FILE,
+        _all_events_header(),
         ROWS_MARKER,
-        render_activity_row(event),
+        render_all_events_row(event),
         sha,
     )
 
     # If nothing was written, this commit was already ingested everywhere.
-    result.skipped_duplicate = not result.all_written and not result.activity_written
+    result.skipped_duplicate = (
+        not result.all_written and not result.all_events_written
+    )
     return result

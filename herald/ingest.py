@@ -258,13 +258,23 @@ def render_rollup_entry(event: dict[str, Any], pool_ids: list[str]) -> str:
 _PLATFORM_BADGE = (("macos", "🍎 mac"), ("linux", "🐧 linux"), ("windows", "🪟 windows"))
 
 
-def _human_time(timestamp: str) -> str:
-    """Render an ISO timestamp as a compact, scannable 'Jul 16 10:16'."""
+def _parse_ts(timestamp: str) -> datetime | None:
     try:
-        dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        return datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
     except ValueError:
-        return timestamp[:16].replace("T", " ")
-    return dt.strftime("%b %d %H:%M")
+        return None
+
+
+def _event_date(timestamp: str) -> str:
+    """Day header for the diary, e.g. 'Jul 16, 2026' (falls back to the date part)."""
+    dt = _parse_ts(timestamp)
+    return dt.strftime("%b %d, %Y") if dt else timestamp[:10]
+
+
+def _event_time(timestamp: str) -> str:
+    """Time-of-day cell within a day section, e.g. '10:16' (24h)."""
+    dt = _parse_ts(timestamp)
+    return dt.strftime("%H:%M") if dt else timestamp[11:16]
 
 
 def _where_summary(event: dict[str, Any]) -> str:
@@ -296,7 +306,7 @@ def render_all_events_row(event: dict[str, Any]) -> str:
     # the comment renders invisibly.
     commit_cell = f"[`{sha[:7]}`]({event['commit_url']})<!-- herald:commit={sha} -->"
     return (
-        f"| {_human_time(event['timestamp'])} | {change} "
+        f"| {_event_time(event['timestamp'])} | {change} "
         f"| {_where_summary(event)} | {commit_cell} |\n"
     )
 
@@ -322,13 +332,16 @@ def _rollup_header(label: str) -> str:
     )
 
 
+# One table per day; the day's date is the `## ` header above it.
+_DAY_TABLE_HEAD = "| Time | Change | Where | Commit |\n|---|---|---|---|\n"
+
+
 def _all_events_header() -> str:
     return (
         "# All events\n\n"
         "Every change we collect across all reporter repos, maintained by "
-        "RelOps Herald. Newest first; times as reported by the source.\n\n"
-        "| When | Change | Where | Commit |\n"
-        "|---|---|---|---|\n"
+        "RelOps Herald. Grouped by day, newest first; times as reported by the "
+        "source.\n\n"
         f"{ROWS_MARKER}\n"
     )
 
@@ -362,6 +375,42 @@ def _write_newest_first(
         path.parent.mkdir(parents=True, exist_ok=True)
 
     path.write_text(_insert_after_marker(existing, marker, block), encoding="utf-8")
+    return True
+
+
+def _write_all_events(path: Path, event: dict[str, Any], commit_sha: str) -> bool:
+    """Append the event to the diary-style firehose (day-grouped, newest first).
+
+    Rows live under a ``## <date>`` header + per-day table. A new row goes at the
+    top of its day's table if that day already exists, else a fresh day section
+    is created at the top of the file. Idempotent per ``commit_sha``. Real events
+    arrive in time order, so a newer date landing on top is the common case.
+    """
+    if path.exists():
+        text = path.read_text(encoding="utf-8")
+        if f"herald:commit={commit_sha}" in text:
+            return False
+        if ROWS_MARKER not in text:
+            raise HeraldError(f"{path} is missing the {ROWS_MARKER} marker")
+    else:
+        text = _all_events_header()
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+    row = render_all_events_row(event)
+    day_header = f"## {_event_date(event['timestamp'])}"
+
+    if day_header in text:
+        # Insert at the top of this day's rows: just after its table separator.
+        start = text.index(day_header)
+        sep = text.index("|---|---|---|---|", start)
+        at = text.index("\n", sep) + 1
+        text = text[:at] + row + text[at:]
+    else:
+        # New day section at the top of the log (right after the marker).
+        block = f"{day_header}\n\n{_DAY_TABLE_HEAD}{row}\n"
+        text = _insert_after_marker(text, ROWS_MARKER, block)
+
+    path.write_text(text, encoding="utf-8")
     return True
 
 
@@ -411,14 +460,8 @@ def ingest_event(
         ):
             result.rollup_logs.append(rollup_path)
 
-    # All-events firehose.
-    result.all_events_written = _write_newest_first(
-        root / ALL_EVENTS_FILE,
-        _all_events_header(),
-        ROWS_MARKER,
-        render_all_events_row(event),
-        sha,
-    )
+    # All-events firehose (diary: day-grouped, newest first).
+    result.all_events_written = _write_all_events(root / ALL_EVENTS_FILE, event, sha)
 
     # If nothing was written, this commit was already ingested everywhere.
     result.skipped_duplicate = (

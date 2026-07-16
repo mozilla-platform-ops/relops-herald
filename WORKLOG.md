@@ -119,8 +119,15 @@ still scoped to a build branch (`herald-reporter-dev`), not master.
   `Commit` is a 7-char sha link. Dropped the repo column (single source repo for
   now; re-add when >1). This killed the unbounded Entities cell — the widest row
   went 1,441 → ~155 chars. Migrated the existing 21 rows in place.
-- Added `_human_time` / `_where_summary` (+ tests). **Next:** optional day-group
-  headers (`## Jul 16, 2026`) — deferred.
+- Added `_where_summary` + `_event_date`/`_event_time` (+ tests).
+
+### 2026-07-16 (even later) — firehose reads like a diary
+- Day-grouped the all-events firehose: rows now sit under `## <date>` headers
+  (e.g. `## Jul 16, 2026`) in per-day tables, `Time | Change | Where | Commit`
+  (time-only rows, date in the header). New dedicated writer `_write_all_events`
+  inserts a row at the top of its day's table, creating a new day section at the
+  top of the file when needed; idempotent per commit_sha. Migrated the live file
+  (rebuilt from pre-format git history to keep full timestamps/entities). 22 tests.
 
 ### 2026-07-16 (later) — live end-to-end replay validated the platform tree
 - Ran the **replay test method** against real ronin history to exercise the new

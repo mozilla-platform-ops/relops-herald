@@ -15,7 +15,8 @@ from pathlib import Path
 
 from herald.ingest import (
     ValidationFailed,
-    _human_time,
+    _event_date,
+    _event_time,
     _where_summary,
     ingest_event,
     load_schema,
@@ -114,11 +115,13 @@ class RoutingTests(unittest.TestCase):
     def test_no_os_signal_is_unroutable(self) -> None:
         self.assertIsNone(route_pool("generic_worker"))
 
-    def test_human_time_compact(self) -> None:
-        self.assertEqual(_human_time("2026-07-16T10:16:36-07:00"), "Jul 16 10:16")
-        self.assertEqual(_human_time("2026-05-21T15:00:00Z"), "May 21 15:00")
-        # Unparseable input falls back gracefully, never raises.
-        self.assertEqual(_human_time("not-a-date-at-all"), "not-a-date-at-al")
+    def test_event_date_and_time(self) -> None:
+        self.assertEqual(_event_date("2026-07-16T10:16:36-07:00"), "Jul 16, 2026")
+        self.assertEqual(_event_time("2026-07-16T10:16:36-07:00"), "10:16")
+        self.assertEqual(_event_date("2026-05-21T15:00:00Z"), "May 21, 2026")
+        # Unparseable input falls back gracefully to substrings, never raises.
+        self.assertEqual(_event_date("2026-13-99T99:99:99"), "2026-13-99")
+        self.assertEqual(_event_time("2026-13-99T99:99:99"), "99:99")
 
     def test_where_summary_badges_and_count(self) -> None:
         ev = self._event([
@@ -222,6 +225,31 @@ class IngestTests(unittest.TestCase):
         pool = self._read("changelogs/worker-pool/mac/gecko_1_b_osx_1015.md")
         self.assertIn("`role.pp`", pool)
         self.assertIn("`hiera.yaml`", pool)
+
+    def test_firehose_groups_by_day(self) -> None:
+        e1 = _load("event-example-success.json")
+        e1["timestamp"] = "2026-07-16T09:00:00Z"
+        e2 = copy.deepcopy(e1)
+        e2["commit_sha"] = "1" * 40
+        e2["commit_url"] = e1["commit_url"].replace(e1["commit_sha"], e2["commit_sha"])
+        e2["timestamp"] = "2026-07-16T11:30:00Z"  # same day, later
+        e3 = copy.deepcopy(e1)
+        e3["commit_sha"] = "2" * 40
+        e3["commit_url"] = e1["commit_url"].replace(e1["commit_sha"], e3["commit_sha"])
+        e3["timestamp"] = "2026-07-17T08:00:00Z"  # next day
+        for e in (e1, e2, e3):
+            ingest_event(e, self.tmp)
+
+        log = self._read("changelogs/all-events/changelog.md")
+        # Two day headers, newest day on top.
+        self.assertEqual(log.count("## Jul 16, 2026"), 1)
+        self.assertEqual(log.count("## Jul 17, 2026"), 1)
+        self.assertLess(log.index("## Jul 17, 2026"), log.index("## Jul 16, 2026"))
+        # Same-day rows share one section; times only (no date) in the row.
+        self.assertIn("| 09:00 |", log)
+        self.assertIn("| 11:30 |", log)
+        # Within the day, the later event is inserted above the earlier one.
+        self.assertLess(log.index("| 11:30 |"), log.index("| 09:00 |"))
 
     def test_ingest_is_idempotent_per_commit(self) -> None:
         event = _load("event-example-success.json")

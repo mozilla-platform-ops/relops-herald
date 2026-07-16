@@ -311,15 +311,33 @@ def _event_time(timestamp: str) -> str:
     return dt.strftime("%H:%M") if dt else timestamp[11:16]
 
 
+def _impact_pools(event: dict[str, Any]) -> set[str]:
+    """Roles the reporter's impact analysis flagged (worker pools + azure images).
+
+    Empty for events with no ``impact`` field (older/simple reporters).
+    """
+    impact = event.get("impact") or {}
+    return set(impact.get("worker_pools") or []) | set(impact.get("azure_images") or [])
+
+
+def _affected_pools(event: dict[str, Any]) -> set[str]:
+    """Pools this event touches: directly-changed roles plus impacted roles."""
+    return set(worker_pool_ids(event)) | _impact_pools(event)
+
+
 def _event_buckets(event: dict[str, Any]) -> list[tuple[str | None, str]]:
     """Firehose buckets an event belongs to, by OS signal; ``Other`` if none.
 
-    OS is derived from every entity id (not just pool types), so a module like
-    ``macos_ntp`` still lands under Mac workers.
+    OS is derived from every entity id (so a module like ``macos_ntp`` lands
+    under Mac workers) *and* from any impacted pool ids — so a shared change
+    with impact analysis lands under the platforms it actually affects rather
+    than in Other.
     """
     oses: set[str] = set()
     for entity in event["entities"]:
         oses |= _oses_for_id(entity["id"])
+    for pool_id in _impact_pools(event):
+        oses |= _oses_for_id(pool_id)
     hit = [
         (os_name, heading)
         for os_name, heading in _FIREHOSE_BUCKETS
@@ -331,13 +349,13 @@ def _event_buckets(event: dict[str, Any]) -> list[tuple[str | None, str]]:
 def _pools_for_platform(event: dict[str, Any], os_name: str | None) -> str:
     """Worker pools of ``os_name`` this event affects, or '—' if none.
 
-    Bounded to ``_POOLS_BUDGET`` chars of ids; the rest collapse to '+N more'
-    (the full list is always in each pool's own changelog) so the column stays
-    within its width floor.
+    Includes both directly-changed and transitively-impacted pools. Bounded to
+    ``_POOLS_BUDGET`` chars of ids; the rest collapse to '+N more' (the full list
+    is always in each pool's own changelog) so the column stays within its floor.
     """
     if os_name is None:
         return "—"
-    ids = [p for p in worker_pool_ids(event) if os_name in _oses_for_id(p)]
+    ids = sorted(p for p in _affected_pools(event) if os_name in _oses_for_id(p))
     if not ids:
         return "—"
     shown: list[str] = []

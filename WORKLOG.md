@@ -120,6 +120,21 @@ Verify once the reporter fires on real merges (trigger flipped to `master`):
 
 ## Log
 
+### 2026-07-16 (impact, Herald side) — firehose shows what shared changes affect
+- Added an optional `impact` object to `schema/event.schema.json` (`worker_pools`
+  / `azure_images`), matching the scaffold branch's impact model. Optional so
+  existing events still validate during rollout.
+- `ingest.py`: firehose now folds impacted pools into bucketing + the Worker-pools
+  cell (`_impact_pools` / `_affected_pools`). A shared change (e.g. `worker_runner`,
+  `common.yaml`) with impact analysis now fans into every affected platform table
+  with its impacted pools, instead of a single `Other · —` row. Fully backward-
+  compatible: events without `impact` render exactly as before. 28 tests.
+- Per-pool changelogs are NOT created for merely-impacted (untouched) pools — only
+  directly-changed roles get their own changelog; impact is firehose-only.
+- **Next:** reporter side — port `compute_impact` (Puppet include-closure parsing)
+  from the scaffold branch into the live `report.yml` so events actually carry
+  `impact`.
+
 ### 2026-07-16 (firehose v5) — equal-width platform tables (GitHub render)
 - GitHub sizes tables to content, so the skinny Windows table looked shorter.
   Fixed by giving every platform table the same column floors: pad the shared

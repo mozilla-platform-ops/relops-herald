@@ -68,6 +68,15 @@ class SchemaContractTests(unittest.TestCase):
         with self.assertRaises(ValidationFailed):
             validate_event(bad, self.schema)
 
+    def test_impact_field_is_optional_and_valid(self) -> None:
+        ev = _load("event-example-success.json")
+        validate_event(ev, self.schema)  # no impact -> still valid
+        ev["impact"] = {
+            "worker_pools": ["gecko_t_linux_2404_talos"],
+            "azure_images": ["win116424h2azure"],
+        }
+        validate_event(ev, self.schema)  # with impact -> valid
+
     def test_bad_entity_type_is_rejected(self) -> None:
         bad = _load("event-example-success.json")
         bad["entities"][0]["type"] = "not-a-real-type"
@@ -244,6 +253,31 @@ class IngestTests(unittest.TestCase):
         self.assertEqual(result.all_written, [])  # no pool/rollup logs
         self.assertTrue(self._exists("changelogs/all-events/changelog.md"))
         self.assertFalse(self._exists("changelogs/worker-pool"))
+
+    def test_shared_change_with_impact_buckets_into_affected_platforms(self) -> None:
+        # A module-only change (no OS in its id) that ships impact analysis lands
+        # under the platforms of its impacted pools, not in Other.
+        event = _load("event-example-success.json")
+        event["entities"] = [
+            {"type": "module", "id": "worker_runner",
+             "files": ["modules/worker_runner/manifests/init.pp"]}
+        ]
+        event["impact"] = {
+            "worker_pools": ["gecko_t_osx_1500_m4", "gecko_t_linux_2404_talos"],
+            "azure_images": ["win116424h2azure"],
+        }
+        ingest_event(event, self.tmp)
+        log = self._read("changelogs/all-events/changelog.md")
+        self.assertIn("### 🍎 Mac workers", log)
+        self.assertIn("### 🐧 Linux workers", log)
+        self.assertIn("### 🪟 Windows workers", log)
+        self.assertNotIn("### Other", log)  # impact rescued it from Other
+        # Each platform's cell shows its impacted pool.
+        self.assertIn("`gecko_t_osx_1500_m4`", log)
+        self.assertIn("`gecko_t_linux_2404_talos`", log)
+        self.assertIn("`win116424h2azure`", log)
+        # No per-pool changelogs are created for merely-impacted (untouched) pools.
+        self.assertFalse(self._exists("changelogs/worker-pool/mac"))
 
     def test_ai_failure_event_renders_stub(self) -> None:
         event = _load("event-example-ai-failure.json")  # error-shaped ai_summary

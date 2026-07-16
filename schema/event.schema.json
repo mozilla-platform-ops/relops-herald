@@ -134,6 +134,25 @@
           }
         }
       }
+    },
+    "impact": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Roles affected transitively by this commit (via the Puppet include closure), bucketed. Roles whose name contains 'azure' are Azure custom images; all others map 1:1 to Taskcluster worker pools. Optional; populated by reporters that do impact analysis.",
+      "properties": {
+        "worker_pools": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true,
+          "description": "Worker-pool (role) names impacted transitively, excluding azure roles. Sorted."
+        },
+        "azure_images": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true,
+          "description": "Impacted role names containing 'azure' (Azure custom images tracked separately). Sorted."
+        }
+      }
     }
   }
 }

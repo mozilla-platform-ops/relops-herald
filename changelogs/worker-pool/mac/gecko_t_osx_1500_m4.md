@@ -3,6 +3,17 @@
 Changelog for the `gecko_t_osx_1500_m4` mac worker pool (role + role Hiera), maintained by RelOps Herald. Newest entries first.
 
 <!-- HERALD:ENTRIES -->
+<!-- herald:commit=28dab26ff79406ae625f91611528183ec06d7d29 -->
+## Enable Safari Remote Automation on SIP-enabled macOS 14/15 workers (#1152)
+
+[`28dab26ff794`](https://github.com/mozilla-platform-ops/ronin_puppet/commit/28dab26ff79406ae625f91611528183ec06d7d29) · 2026-07-16T10:07:19-07:00 · @markcor
+
+Adds SIP-aware TCC/Safari automation support for macOS 14/15 CI workers: a new org.mozilla.ci-tcc-pppc.mobileconfig MDM profile grants system-level TCC permissions when SIP is enabled, while add_tcc_perms.sh now detects SIP state via csrutil and only writes system TCC.db entries directly on SIP-disabled hosts. Also adjusts run-puppet.sh to avoid unnecessary reboots on transient TCC.db access errors, and temporarily disables the virt_audio_s3 class on gecko_t_osx_1500_m4(_staging) pending a BlackHole install fix on macOS 15.
+
+Files:
+  - `data/roles/gecko_t_osx_1500_m4.yaml`
+
+Tags: `macos` `tcc` `sip` `safari` `mobileconfig`
 <!-- herald:commit=bb63fec04a5567001b18f0233e985596e72291aa -->
 ## [RELOPS-2214] puppet module power mgmt (#1071)
 

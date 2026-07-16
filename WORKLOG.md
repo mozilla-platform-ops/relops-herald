@@ -107,6 +107,15 @@ still scoped to a build branch (`herald-reporter-dev`), not master.
    prompt/tags against real merges.
 7. Later: Slack output; reporters for worker-images / fxci-config / infra.
 
+## Post-go-live checklist
+
+Verify once the reporter fires on real merges (trigger flipped to `master`):
+
+- [ ] **PR-author attribution** — on a real PR-based merge, confirm the event
+      `actor` is the PR author (`.user.login`), not the merger/pusher. Not
+      provable in testing (all replay commits were direct pushes by `markcor` →
+      `github.actor` fallback path). See `report.yml` Discover-PR / Build event.
+
 ---
 
 ## Log

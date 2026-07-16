@@ -3,6 +3,17 @@
 Changelog for the `gecko_t_osx_1500_m4_reprovision_runner` mac worker pool (role + role Hiera), maintained by RelOps Herald. Newest entries first.
 
 <!-- HERALD:ENTRIES -->
+<!-- herald:commit=e21cbf33533305851b0c93ac9249650b5c24b1a4 -->
+## reprovision_runner: point m4-81 at Hangar's dedicated runner frontend (#1277)
+
+[`e21cbf335333`](https://github.com/mozilla-platform-ops/ronin_puppet/commit/e21cbf33533305851b0c93ac9249650b5c24b1a4) · 2026-07-16T10:17:28-07:00 · @markcor
+
+Updated the `gecko_t_osx_1500_m4_reprovision_runner` role to explicitly set `hangar_api_url` to `https://hangar-runner.relops.mozilla.com/api` instead of relying on module defaults. This is required because the human/browser frontend (hangar.relops.mozilla.com) no longer carries mTLS, so runners must use the dedicated runner frontend to reach `/api/reprovision/runner/*` and `/api/screen/agent/*` (see hangar PR #65).
+
+Files:
+  - `data/roles/gecko_t_osx_1500_m4_reprovision_runner.yaml`
+
+Tags: `hiera` `config` `reprovision-runner` `mtls` `hangar`
 <!-- herald:commit=8198634cda099676d0737758ffbe179b3e4ad543 -->
 ## reprovision_runner: activate step_renew on m4-81 (auto-renewing cert) (#1276)
 

@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -253,25 +254,50 @@ def render_rollup_entry(event: dict[str, Any], pool_ids: list[str]) -> str:
     return _entry(event, files, entities=entities)
 
 
+# Platform badges for the all-events "Where" column, in a stable order.
+_PLATFORM_BADGE = (("macos", "🍎 mac"), ("linux", "🐧 linux"), ("windows", "🪟 windows"))
+
+
+def _human_time(timestamp: str) -> str:
+    """Render an ISO timestamp as a compact, scannable 'Jul 16 10:16'."""
+    try:
+        dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        return timestamp[:16].replace("T", " ")
+    return dt.strftime("%b %d %H:%M")
+
+
+def _where_summary(event: dict[str, Any]) -> str:
+    """Compact 'where' cell: platform badge(s) + entity count.
+
+    Platforms are derived from every entity id (not just pool types), so a
+    module like ``macos_ntp`` still reads as mac. The full entity list lives in
+    the per-pool changelogs, so the firehose only carries a count.
+    """
+    oses: set[str] = set()
+    for entity in event["entities"]:
+        oses |= _oses_for_id(entity["id"])
+    badges = " · ".join(label for os_name, label in _PLATFORM_BADGE if os_name in oses)
+    return f"{badges or 'shared'} · {len(event['entities'])}"
+
+
 def render_all_events_row(event: dict[str, Any]) -> str:
     """Render one all-events firehose table row for the whole event."""
     ai = event["ai_summary"]
-    entities = ", ".join(f"{e['type']}:{e['id']}" for e in event["entities"])
     if ai.get("headline"):
         change = ai["headline"]
     elif ai.get("description"):
         change = event["commit_subject"]
     else:
         change = f"⚠️ {event['commit_subject']} (AI summary unavailable)"
-    # Escape pipes so cell content can't break the table.
-    change = change.replace("|", "\\|")
-    entities = entities.replace("|", "\\|")
-    # The commit cell carries a hidden anchor so rows are idempotent per commit,
-    # just like the changelog entries. The comment renders invisibly.
-    commit_cell = f"{_commit_link(event)}<!-- herald:commit={event['commit_sha']} -->"
+    change = change.replace("|", "\\|")  # escape pipes so cells can't break
+    sha = event["commit_sha"]
+    # The commit cell carries a hidden anchor so rows are idempotent per commit;
+    # the comment renders invisibly.
+    commit_cell = f"[`{sha[:7]}`]({event['commit_url']})<!-- herald:commit={sha} -->"
     return (
-        f"| {event['timestamp']} | {event['source_repo']} | {entities} "
-        f"| {change} | {commit_cell} |\n"
+        f"| {_human_time(event['timestamp'])} | {change} "
+        f"| {_where_summary(event)} | {commit_cell} |\n"
     )
 
 
@@ -300,9 +326,9 @@ def _all_events_header() -> str:
     return (
         "# All events\n\n"
         "Every change we collect across all reporter repos, maintained by "
-        "RelOps Herald. Newest first.\n\n"
-        "| When (UTC) | Repo | Entities | Change | Commit |\n"
-        "|---|---|---|---|---|\n"
+        "RelOps Herald. Newest first; times as reported by the source.\n\n"
+        "| When | Change | Where | Commit |\n"
+        "|---|---|---|---|\n"
         f"{ROWS_MARKER}\n"
     )
 

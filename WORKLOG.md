@@ -111,6 +111,17 @@ still scoped to a build branch (`herald-reporter-dev`), not master.
 
 ## Log
 
+### 2026-07-16 (later still) — humanized the all-events firehose
+- Reworked `render_all_events_row` / `_all_events_header` for readability:
+  columns are now **When | Change | Where | Commit**. `When` is compact
+  (`Jul 16 10:16`), `Change` leads with the AI headline, `Where` is platform
+  badge(s) + entity count (`🍎 mac · 🐧 linux · 38`) instead of the full id list,
+  `Commit` is a 7-char sha link. Dropped the repo column (single source repo for
+  now; re-add when >1). This killed the unbounded Entities cell — the widest row
+  went 1,441 → ~155 chars. Migrated the existing 21 rows in place.
+- Added `_human_time` / `_where_summary` (+ tests). **Next:** optional day-group
+  headers (`## Jul 16, 2026`) — deferred.
+
 ### 2026-07-16 (later) — live end-to-end replay validated the platform tree
 - Ran the **replay test method** against real ronin history to exercise the new
   routing live (see memory `herald-replay-test-method`). In a dedicated clone

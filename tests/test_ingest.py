@@ -15,6 +15,8 @@ from pathlib import Path
 
 from herald.ingest import (
     ValidationFailed,
+    _human_time,
+    _where_summary,
     ingest_event,
     load_schema,
     route_pool,
@@ -111,6 +113,23 @@ class RoutingTests(unittest.TestCase):
 
     def test_no_os_signal_is_unroutable(self) -> None:
         self.assertIsNone(route_pool("generic_worker"))
+
+    def test_human_time_compact(self) -> None:
+        self.assertEqual(_human_time("2026-07-16T10:16:36-07:00"), "Jul 16 10:16")
+        self.assertEqual(_human_time("2026-05-21T15:00:00Z"), "May 21 15:00")
+        # Unparseable input falls back gracefully, never raises.
+        self.assertEqual(_human_time("not-a-date-at-all"), "not-a-date-at-al")
+
+    def test_where_summary_badges_and_count(self) -> None:
+        ev = self._event([
+            {"type": "role", "id": "gecko_1_b_osx_1015", "files": ["a"]},
+            {"type": "module", "id": "linux_packages", "files": ["b"]},
+        ])
+        # Platforms derived from all entity ids, in mac/linux/windows order.
+        self.assertEqual(_where_summary(ev), "🍎 mac · 🐧 linux · 2")
+        # No OS signal anywhere -> "shared".
+        shared = self._event([{"type": "module", "id": "worker_runner", "files": ["c"]}])
+        self.assertEqual(_where_summary(shared), "shared · 1")
 
     def test_worker_pool_ids_merge_role_and_hiera(self) -> None:
         ev = self._event([
